@@ -51,6 +51,7 @@ export const blogAPI = {
   getBlog: (id) => api.get(`/blogs/${id}`),
   createBlog: (data) => api.post('/blogs', data),
   deleteBlog: (id) => api.delete(`/blogs/${id}`),
+  getEntityDetails: (blogId) => api.get(`/blogs/${blogId}/entities`),
 };
 
 // User API calls

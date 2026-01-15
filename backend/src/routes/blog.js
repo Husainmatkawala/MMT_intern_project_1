@@ -1,7 +1,9 @@
 import express from 'express';
 import axios from 'axios';
+import mongoose from 'mongoose';
 import Blog from '../models/Blog.js';
 import User from '../models/User.js';
+import TempEntityJSON from '../models/TempEntityJSON.js';
 import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -38,6 +40,63 @@ router.get('/my', protect, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/blogs/:id/entities
+// @desc    Get extracted entities for a blog
+// @access  Private
+router.get('/:id/entities', protect, async (req, res) => {
+  try {
+    const blogId = req.params.id;
+    
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(blogId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid blog ID format' 
+      });
+    }
+    
+    // Find the blog
+    const blog = await Blog.findById(blogId);
+    
+    if (!blog) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Blog not found' 
+      });
+    }
+    
+    // Find the entity extraction data
+    const entityData = await TempEntityJSON.findOne({ bid: blogId });
+    
+    if (!entityData || !entityData.name_entity_json) {
+      // No entities extracted yet or extraction failed
+      return res.json({
+        success: true,
+        blog_id: blogId,
+        blog_title: blog.tittle,
+        entities: {},
+        message: 'No entities have been extracted for this blog yet'
+      });
+    }
+    
+    // Return the entities with blog info
+    res.json({
+      success: true,
+      blog_id: blogId,
+      blog_title: blog.tittle,
+      entities: entityData.name_entity_json
+    });
+    
+  } catch (error) {
+    console.error('Error fetching entity details:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error while fetching entity details', 
+      error: error.message 
+    });
   }
 });
 
@@ -111,7 +170,8 @@ router.post('/', protect, async (req, res) => {
 
     const populatedBlog = await Blog.findById(blog._id).populate('uid', 'username');
 
-    // Call NER service to extract entities (non-blocking)
+    // Call NER service to extract entities
+    let extractedEntities = null;
     try {
       console.log('Calling NER service for entity extraction...');
       const nerResponse = await axios.post(`${NER_SERVICE_URL}/extract-entities`, {
@@ -123,6 +183,11 @@ router.post('/', protect, async (req, res) => {
         timeout: 30000 // 30 second timeout
       });
       console.log('NER extraction successful:', nerResponse.data.message);
+      
+      // Store entities from NER response
+      if (nerResponse.data.success && nerResponse.data.entities) {
+        extractedEntities = nerResponse.data.entities;
+      }
     } catch (nerError) {
       // Log error but don't fail blog creation
       console.error('NER extraction failed:', nerError.message);
@@ -131,7 +196,11 @@ router.post('/', protect, async (req, res) => {
       }
     }
 
-    res.status(201).json(populatedBlog);
+    // Return blog with entities
+    res.status(201).json({
+      ...populatedBlog.toObject(),
+      entities: extractedEntities
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error', error: error.message });

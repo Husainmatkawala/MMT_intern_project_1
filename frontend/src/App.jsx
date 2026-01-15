@@ -6,6 +6,7 @@ import Signup from './pages/Signup';
 import AllBlogs from './pages/AllBlogs';
 import MyBlogs from './pages/MyBlogs';
 import CreateBlog from './pages/CreateBlog';
+import EntityDetailsForm from './pages/EntityDetailsForm';
 
 // Protected Route wrapper
 const ProtectedRoute = ({ children }) => {
@@ -83,6 +84,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <CreateBlog />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/entity-details/:blogId"
+              element={
+                <ProtectedRoute>
+                  <EntityDetailsForm />
                 </ProtectedRoute>
               }
             />
