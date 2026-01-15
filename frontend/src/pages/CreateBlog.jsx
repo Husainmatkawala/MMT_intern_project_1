@@ -57,7 +57,7 @@ const CreateBlog = () => {
     setValidationError(null);
 
     try {
-      await blogAPI.createBlog({
+      const response = await blogAPI.createBlog({
         tittle: formData.tittle,
         travelexp: formData.travelexp,
         imgs: [],
@@ -65,9 +65,23 @@ const CreateBlog = () => {
 
       setSubmitSuccess(true);
       
-      // Redirect after 2 seconds
+      // Redirect to entity details page after 2 seconds
       setTimeout(() => {
-        navigate('/my-blogs');
+        const blogId = response.data._id;
+        const entities = response.data.entities;
+        
+        if (blogId && entities) {
+          // Navigate with entities in state
+          navigate(`/entity-details/${blogId}`, { 
+            state: { 
+              entities: entities,
+              blogTitle: response.data.tittle 
+            } 
+          });
+        } else {
+          // No entities extracted, skip to my-blogs
+          navigate('/my-blogs');
+        }
       }, 2000);
     } catch (error) {
       console.error(error);
