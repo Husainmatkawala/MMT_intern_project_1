@@ -1,5 +1,6 @@
 import json
 import logging
+import httpx
 from openai import AzureOpenAI
 from config import Config
 
@@ -12,10 +13,13 @@ class NERExtractor:
     
     def __init__(self):
         """Initialize Azure OpenAI client"""
+        # Create a custom httpx client without proxies to avoid compatibility issues
+        http_client = httpx.Client()
         self.client = AzureOpenAI(
             api_key=Config.AZURE_OPENAI_KEY,
             api_version=Config.AZURE_OPENAI_API_VERSION,
-            azure_endpoint=Config.AZURE_OPENAI_ENDPOINT
+            azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
+            http_client=http_client
         )
         self.deployment = Config.AZURE_OPENAI_DEPLOYMENT
     
