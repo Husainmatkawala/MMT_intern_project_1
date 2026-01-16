@@ -13,7 +13,6 @@ const CreateBlog = () => {
   const [errors, setErrors] = useState({});
   const [validationError, setValidationError] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitSuccess, setSubmitSuccess] = useState(false);
   const navigate = useNavigate();
 
   const handleInputChange = (field, value) => {
@@ -63,26 +62,22 @@ const CreateBlog = () => {
         imgs: [],
       });
 
-      setSubmitSuccess(true);
+      // Directly navigate to entity details page
+      const blogId = response.data._id;
+      const entities = response.data.entities;
       
-      // Redirect to entity details page after 2 seconds
-      setTimeout(() => {
-        const blogId = response.data._id;
-        const entities = response.data.entities;
-        
-        if (blogId && entities) {
-          // Navigate with entities in state
-          navigate(`/entity-details/${blogId}`, { 
-            state: { 
-              entities: entities,
-              blogTitle: response.data.tittle 
-            } 
-          });
-        } else {
-          // No entities extracted, skip to my-blogs
-          navigate('/my-blogs');
-        }
-      }, 2000);
+      if (blogId && entities) {
+        // Navigate with entities in state
+        navigate(`/entity-details/${blogId}`, { 
+          state: { 
+            entities: entities,
+            blogTitle: response.data.tittle 
+          } 
+        });
+      } else {
+        // No entities extracted, skip to my-blogs
+        navigate('/my-blogs');
+      }
     } catch (error) {
       console.error(error);
       
@@ -101,34 +96,6 @@ const CreateBlog = () => {
       setIsSubmitting(false);
     }
   };
-
-  if (submitSuccess) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
-        <Header />
-        <div className="flex items-center justify-center p-4 py-20 animate-fade-in">
-          <div className="section-card max-w-md w-full text-center animate-slide-up">
-            <div className="relative w-20 h-20 mx-auto mb-6">
-              <div className="absolute inset-0 bg-gradient-to-r from-green-400 to-emerald-500 rounded-full animate-pulse-slow"></div>
-              <div className="absolute inset-2 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center">
-                <FiCheck className="w-10 h-10 text-green-600 dark:text-green-400" />
-              </div>
-            </div>
-            <h2 className="text-3xl font-bold bg-gradient-to-r from-primary-600 to-purple-600 dark:from-primary-400 dark:to-purple-400 bg-clip-text text-transparent mb-3">
-              Blog Created!
-            </h2>
-            <p className="text-gray-600 dark:text-gray-300 mb-6 leading-relaxed">
-              Your travel experience has been shared successfully. Redirecting to your blogs...
-            </p>
-            <div className="flex items-center justify-center gap-2 text-primary-600 dark:text-primary-400 font-semibold">
-              <FiAward className="w-5 h-5" />
-              <span>Keep sharing amazing experiences!</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">

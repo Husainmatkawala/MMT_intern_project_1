@@ -165,17 +165,48 @@ const EntityDetailsForm = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setError(null);
 
-    // Simulate submission (since backend is not implemented yet)
-    setTimeout(() => {
-      setIsSubmitting(false);
-      setSubmitSuccess(true);
+    try {
+      // Prepare FormData for multipart upload
+      const formDataToSend = new FormData();
       
-      // Redirect after 2 seconds
-      setTimeout(() => {
-        navigate('/my-blogs');
-      }, 2000);
-    }, 1500);
+      // Add entity data as JSON string
+      formDataToSend.append('entityData', JSON.stringify(formData));
+      
+      // Add all images with proper field names
+      Object.entries(images).forEach(([entityType, entities]) => {
+        Object.entries(entities).forEach(([entityId, imageFiles]) => {
+          imageFiles.forEach((imageFile) => {
+            // Field name format: images_entityType_entityId
+            formDataToSend.append(`images_${entityType}_${entityId}`, imageFile);
+          });
+        });
+      });
+
+      console.log('Submitting entity details for blog:', blogId);
+      
+      // Call the API
+      const response = await blogAPI.saveEntityDetails(blogId, formDataToSend);
+      
+      if (response.data.success) {
+        console.log('Entity details saved successfully:', response.data);
+        setIsSubmitting(false);
+        setSubmitSuccess(true);
+        
+        // Redirect after 2 seconds
+        setTimeout(() => {
+          navigate('/my-blogs');
+        }, 2000);
+      } else {
+        throw new Error(response.data.message || 'Failed to save entity details');
+      }
+      
+    } catch (err) {
+      console.error('Error submitting entity details:', err);
+      setIsSubmitting(false);
+      setError(err.response?.data?.message || err.message || 'Failed to save entity details. Please try again.');
+    }
   };
 
   // Calculate total entities count
@@ -224,10 +255,10 @@ const EntityDetailsForm = () => {
               </div>
             </div>
             <h2 className="text-3xl font-bold bg-gradient-to-r from-primary-600 to-purple-600 dark:from-primary-400 dark:to-purple-400 bg-clip-text text-transparent mb-3">
-              Details Saved!
+              Blog Created Successfully!
             </h2>
             <p className="text-gray-600 dark:text-gray-300 mb-6 leading-relaxed">
-              Your entity details have been saved successfully. You're earning rewards for providing accurate information!
+              Your travel blog has been created with all the details. Thank you for sharing your experience with fellow travelers!
             </p>
             <div className="flex items-center justify-center gap-2 text-primary-600 dark:text-primary-400 font-semibold">
               <FiAward className="w-5 h-5" />

@@ -52,6 +52,16 @@ export const blogAPI = {
   createBlog: (data) => api.post('/blogs', data),
   deleteBlog: (id) => api.delete(`/blogs/${id}`),
   getEntityDetails: (blogId) => api.get(`/blogs/${blogId}/entities`),
+  saveEntityDetails: (blogId, formData) => {
+    // Use axios directly for multipart/form-data
+    const token = localStorage.getItem('token');
+    return axios.post(`${API_URL}/blogs/${blogId}/entity-details`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+        'Authorization': token ? `Bearer ${token}` : ''
+      }
+    });
+  }
 };
 
 // User API calls
