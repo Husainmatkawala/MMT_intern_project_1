@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { blogAPI } from '../utils/api';
 import Header from '../components/Header';
 import BlogCard from '../components/BlogCard';
@@ -8,6 +9,7 @@ const AllBlogs = () => {
   const [blogs, setBlogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const navigate = useNavigate();
 
   useEffect(() => {
     fetchBlogs();
@@ -77,7 +79,11 @@ const AllBlogs = () => {
         {!loading && !error && blogs.length > 0 && (
           <div className="space-y-8">
             {blogs.map((blog) => (
-              <BlogCard key={blog._id} blog={blog} />
+              <BlogCard 
+                key={blog._id} 
+                blog={blog}
+                onClick={(blogId) => navigate(`/blog/${blogId}`)}
+              />
             ))}
           </div>
         )}

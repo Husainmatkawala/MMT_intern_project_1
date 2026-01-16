@@ -25,14 +25,14 @@ const EntityDetailsForm = () => {
       icon: '🏨',
       label: 'Hotels',
       fields: ['name', 'city', 'state', 'rating', 'contact'],
-      imageLabel: 'Upload bills or photos',
+      imageLabel: 'Upload photos',
       imageTypes: ['bill', 'photo']
     },
     restaurants: {
       icon: '🍽️',
       label: 'Restaurants',
       fields: ['name', 'city', 'state', 'rating'],
-      imageLabel: 'Upload bills or food photos',
+      imageLabel: 'Upload photos',
       imageTypes: ['bill', 'food_photo']
     },
     places: {

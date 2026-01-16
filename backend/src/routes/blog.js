@@ -184,7 +184,31 @@ router.get('/:id', protect, async (req, res) => {
       return res.status(404).json({ message: 'Blog not found' });
     }
 
-    res.json(blog);
+    const blogObj = blog.toObject();
+    
+    // Get entity images from TempEntityJSON2
+    const entityData = await TempEntityJSON2.findOne({ blog_id: blog._id });
+    
+    if (entityData && entityData.updated_entities) {
+      // Extract all images from entities
+      const allImages = [];
+      Object.values(entityData.updated_entities).forEach(entityType => {
+        Object.values(entityType).forEach(entity => {
+          if (entity.images && Array.isArray(entity.images)) {
+            allImages.push(...entity.images);
+          }
+        });
+      });
+      
+      // Add entity images and full entity data to blog
+      blogObj.entityImages = allImages;
+      blogObj.entityDetails = entityData.updated_entities;
+    } else {
+      blogObj.entityImages = [];
+      blogObj.entityDetails = null;
+    }
+
+    res.json(blogObj);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error', error: error.message });
