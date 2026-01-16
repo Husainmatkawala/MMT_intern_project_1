@@ -27,7 +27,7 @@ class NERExtractor:
         """Create system prompt for entity extraction"""
         return """You are an expert travel entity extraction system. Extract structured information from travel experiences and return it as valid JSON.
 
-Extract the following entity types:
+Extract the following entity types ONLY if they are mentioned in the text:
 1. **places**: Tourist attractions, monuments, landmarks (name, city, state, rating)
 2. **activities**: Things to do like trekking, shopping, sightseeing (name, city, state, rating, type)
 3. **hotels**: Accommodation places (name, contact, city, state, rating)
@@ -36,14 +36,16 @@ Extract the following entity types:
 6. **Cab**: Taxi/cab services or operators mentioned (name, contact, city, state, rating)
 
 Rules:
+- ONLY include entity types that are explicitly mentioned in the travel experience
+- Do NOT include entity types with empty values or that were not mentioned
 - Use sequential numbering: place1, place2, activity1, activity2, etc.
-- If information is not mentioned, leave field as empty string ""
+- If information is not mentioned for a field, leave field as empty string ""
 - Extract ratings if mentioned (e.g., "5 star hotel" -> rating: "5")
 - For activities, determine type (e.g., "adventure", "sightseeing", "shopping", "cultural")
 - Be thorough and capture ALL entities mentioned in the text
 - Return ONLY valid JSON, no additional text
 
-Required JSON structure:
+JSON structure (include only the entity types that are actually mentioned):
 {
   "places": {
     "place1": {"name": "", "city": "", "state": "", "rating": ""}
@@ -63,7 +65,9 @@ Required JSON structure:
   "Cab": {
     "Cab1": {"name": "", "contact": "", "city": "", "state": "", "rating": ""}
   }
-}"""
+}
+
+Example: If the user only mentions "went by bus and visited a beach", return only {"Bus": {...}, "activities": {...}}"""
     
     def _create_user_prompt(self, title, travel_experience):
         """Create user prompt with travel experience"""
@@ -174,6 +178,13 @@ Extract all entities from the above travel experience and return as JSON."""
                             cleaned_entity[field] = str(value).strip() if value else ""
                         
                         validated[entity_type][entity_key] = cleaned_entity
+        
+        # Filter out empty entity types (entity types with no entities found)
+        validated = {
+            entity_type: entities_dict
+            for entity_type, entities_dict in validated.items()
+            if len(entities_dict) > 0
+        }
         
         return validated
     
