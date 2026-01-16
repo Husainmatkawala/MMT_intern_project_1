@@ -46,7 +46,7 @@ const MyBlogs = () => {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
       <Header />
       
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Page Header */}
         <div className="mb-8">
           <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-primary-600 to-purple-600 dark:from-primary-400 dark:to-purple-400 bg-clip-text text-transparent mb-2 flex items-center gap-3">
@@ -92,9 +92,9 @@ const MyBlogs = () => {
           </div>
         )}
 
-        {/* Blogs Grid */}
+        {/* Blogs List - Vertical Single Column */}
         {!loading && !error && blogs.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="space-y-8">
             {blogs.map((blog) => (
               <BlogCard 
                 key={blog._id} 
