@@ -38,8 +38,35 @@ router.get('/', protect, async (req, res) => {
     const blogs = await Blog.find()
       .populate('uid', 'username')
       .sort({ createdAt: -1 });
-
-    res.json(blogs);
+    
+    // Fetch entity images for each blog
+    const blogsWithImages = await Promise.all(blogs.map(async (blog) => {
+      const blogObj = blog.toObject();
+      
+      // Get entity images from TempEntityJSON2
+      const entityData = await TempEntityJSON2.findOne({ blog_id: blog._id });
+      
+      if (entityData && entityData.updated_entities) {
+        // Extract all images from entities
+        const allImages = [];
+        Object.values(entityData.updated_entities).forEach(entityType => {
+          Object.values(entityType).forEach(entity => {
+            if (entity.images && Array.isArray(entity.images)) {
+              allImages.push(...entity.images);
+            }
+          });
+        });
+        
+        // Add entity images to blog
+        blogObj.entityImages = allImages;
+      } else {
+        blogObj.entityImages = [];
+      }
+      
+      return blogObj;
+    }));
+      
+    res.json(blogsWithImages);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -55,7 +82,34 @@ router.get('/my', protect, async (req, res) => {
       .populate('uid', 'username')
       .sort({ createdAt: -1 });
 
-    res.json(blogs);
+    // Fetch entity images for each blog
+    const blogsWithImages = await Promise.all(blogs.map(async (blog) => {
+      const blogObj = blog.toObject();
+      
+      // Get entity images from TempEntityJSON2
+      const entityData = await TempEntityJSON2.findOne({ blog_id: blog._id });
+      
+      if (entityData && entityData.updated_entities) {
+        // Extract all images from entities
+        const allImages = [];
+        Object.values(entityData.updated_entities).forEach(entityType => {
+          Object.values(entityType).forEach(entity => {
+            if (entity.images && Array.isArray(entity.images)) {
+              allImages.push(...entity.images);
+            }
+          });
+        });
+        
+        // Add entity images to blog
+        blogObj.entityImages = allImages;
+      } else {
+        blogObj.entityImages = [];
+      }
+      
+      return blogObj;
+    }));
+
+    res.json(blogsWithImages);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error', error: error.message });
