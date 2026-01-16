@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { blogAPI } from '../utils/api';
 import Header from '../components/Header';
 import BlogCard from '../components/BlogCard';
@@ -9,6 +10,7 @@ const MyBlogs = () => {
   const [blogs, setBlogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const navigate = useNavigate();
 
   useEffect(() => {
     fetchMyBlogs();
@@ -101,6 +103,7 @@ const MyBlogs = () => {
                 blog={blog} 
                 showDelete={true}
                 onDelete={handleDelete}
+                onClick={(blogId) => navigate(`/blog/${blogId}`)}
               />
             ))}
           </div>
