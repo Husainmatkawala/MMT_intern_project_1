@@ -8,6 +8,7 @@ import User from '../models/User.js';
 import TempEntityJSON from '../models/TempEntityJSON.js';
 import TempEntityJSON2 from '../models/TempEntityJSON2.js';
 import ImageAIScore from '../models/ImageAIScore.js';
+import BlogScore from '../models/BlogScore.js';
 import { protect } from '../middleware/auth.js';
 import { uploadImage } from '../config/cloudinary.js';
 import { processForensicResponse, extractMetadata } from '../services/forensicProcessor.js';
@@ -36,6 +37,9 @@ const NER_SERVICE_URL = process.env.NER_SERVICE_URL || 'http://localhost:5001';
 // Forensic Service URL from environment or default
 const FORENSIC_SERVICE_URL = process.env.FORENSIC_SERVICE_URL || 'http://localhost:5002';
 
+// Blog Score Service URL from environment or default
+const BLOG_SCORE_SERVICE_URL = process.env.BLOG_SCORE_SERVICE_URL || 'http://localhost:5003';
+
 // @route   GET /api/blogs
 // @desc    Get all blogs from all users
 // @access  Private
@@ -45,7 +49,7 @@ router.get('/', protect, async (req, res) => {
       .populate('uid', 'username')
       .sort({ createdAt: -1 });
     
-    // Fetch entity images for each blog
+    // Fetch entity images and scores for each blog
     const blogsWithImages = await Promise.all(blogs.map(async (blog) => {
       const blogObj = blog.toObject();
       
@@ -69,6 +73,23 @@ router.get('/', protect, async (req, res) => {
         blogObj.entityImages = [];
       }
       
+      // Get blog quality score
+      const blogScore = await BlogScore.findOne({ blog_id: blog._id });
+      if (blogScore) {
+        blogObj.qualityScore = {
+          final_score: blogScore.final_score,
+          meaning: blogScore.meaning,
+          scores: {
+            content_depth: blogScore.content_depth_score,
+            entity_richness: blogScore.entity_richness_score,
+            proof_support: blogScore.proof_support_score,
+            authenticity: blogScore.authenticity_score,
+            language_quality: blogScore.language_quality_score,
+            ai_risk: blogScore.ai_risk_score
+          }
+        };
+      }
+      
       return blogObj;
     }));
       
@@ -88,7 +109,7 @@ router.get('/my', protect, async (req, res) => {
       .populate('uid', 'username')
       .sort({ createdAt: -1 });
 
-    // Fetch entity images for each blog
+    // Fetch entity images and scores for each blog
     const blogsWithImages = await Promise.all(blogs.map(async (blog) => {
       const blogObj = blog.toObject();
       
@@ -110,6 +131,23 @@ router.get('/my', protect, async (req, res) => {
         blogObj.entityImages = allImages;
       } else {
         blogObj.entityImages = [];
+      }
+      
+      // Get blog quality score
+      const blogScore = await BlogScore.findOne({ blog_id: blog._id });
+      if (blogScore) {
+        blogObj.qualityScore = {
+          final_score: blogScore.final_score,
+          meaning: blogScore.meaning,
+          scores: {
+            content_depth: blogScore.content_depth_score,
+            entity_richness: blogScore.entity_richness_score,
+            proof_support: blogScore.proof_support_score,
+            authenticity: blogScore.authenticity_score,
+            language_quality: blogScore.language_quality_score,
+            ai_risk: blogScore.ai_risk_score
+          }
+        };
       }
       
       return blogObj;
@@ -212,6 +250,23 @@ router.get('/:id', protect, async (req, res) => {
     } else {
       blogObj.entityImages = [];
       blogObj.entityDetails = null;
+    }
+
+    // Get blog quality score
+    const blogScore = await BlogScore.findOne({ blog_id: blog._id });
+    if (blogScore) {
+      blogObj.qualityScore = {
+        final_score: blogScore.final_score,
+        meaning: blogScore.meaning,
+        scores: {
+          content_depth: blogScore.content_depth_score,
+          entity_richness: blogScore.entity_richness_score,
+          proof_support: blogScore.proof_support_score,
+          authenticity: blogScore.authenticity_score,
+          language_quality: blogScore.language_quality_score,
+          ai_risk: blogScore.ai_risk_score
+        }
+      };
     }
 
     res.json(blogObj);
@@ -604,6 +659,38 @@ router.post('/:id/entity-details', protect, upload.any(), async (req, res) => {
     // Trigger verification in background (non-blocking)
     triggerVerification().catch(err => {
       console.error('Verification trigger error:', err);
+    });
+    
+    // Trigger blog scoring asynchronously (don't block response)
+    const triggerBlogScoring = async () => {
+      try {
+        console.log(`Triggering blog scoring for blog ${blogId}...`);
+        const scoreResponse = await axios.post(
+          `${BLOG_SCORE_SERVICE_URL}/score-blog`,
+          { blog_id: blogId },
+          { timeout: 60000 } // 60 second timeout
+        );
+        console.log(`✓ Blog scoring completed for blog ${blogId}`);
+        console.log(`  - Final score: ${scoreResponse.data.final_score}/100`);
+        console.log(`  - Meaning: ${scoreResponse.data.meaning}`);
+        console.log(`  - Score breakdown:`);
+        console.log(`    - Content depth: ${scoreResponse.data.scores.content_depth_score}`);
+        console.log(`    - Entity richness: ${scoreResponse.data.scores.entity_richness_score}`);
+        console.log(`    - Proof support: ${scoreResponse.data.scores.proof_support_score}`);
+        console.log(`    - Authenticity: ${scoreResponse.data.scores.authenticity_score}`);
+        console.log(`    - Language quality: ${scoreResponse.data.scores.language_quality_score}`);
+        console.log(`    - AI risk: ${scoreResponse.data.scores.ai_risk_score}`);
+      } catch (scoringError) {
+        console.error(`⚠ Blog scoring failed for blog ${blogId}:`, scoringError.message);
+        if (scoringError.response) {
+          console.error('  Error details:', scoringError.response.data);
+        }
+      }
+    };
+    
+    // Trigger in background (non-blocking)
+    triggerBlogScoring().catch(err => {
+      console.error('Blog scoring trigger error:', err);
     });
     
     res.json({
