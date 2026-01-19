@@ -1,0 +1,137 @@
+############################
+# Python / Flask
+############################
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+.Python
+venv/
+.venv/
+env/
+ENV/
+pip-wheel-metadata/
+pip-log.txt
+*.egg-info/
+.eggs/
+dist/
+build/
+
+############################
+# Flask specific
+############################
+instance/
+.webassets-cache
+flask_session/
+
+############################
+# Environment variables / Secrets
+############################
+.env
+.env.*
+*.env
+secrets.json
+config.yaml
+config.yml
+credentials.json
+*.pem
+*.key
+
+############################
+# Jupyter / Notebooks
+############################
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+############################
+# AI / ML / LLM Artifacts
+############################
+models/
+checkpoints/
+weights/
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+*.h5
+*.joblib
+*.pkl
+
+############################
+# HuggingFace / Transformers
+############################
+.cache/
+.huggingface/
+hf_cache/
+
+############################
+# Vector Databases
+############################
+pinecone_data/
+faiss_index/
+chroma/
+chromadb/
+milvus/
+qdrant/
+weaviate/
+
+############################
+# Logs & Debug
+############################
+logs/
+*.log
+debug.log
+nohup.out
+
+############################
+# Temporary / Runtime Files
+############################
+tmp/
+temp/
+.cache/
+*.tmp
+*.swp
+*.swo
+
+############################
+# Frontend / UI (if any)
+############################
+node_modules/
+dist/
+build/
+npm-debug.log*
+yarn-error.log*
+
+############################
+# Docker
+############################
+*.pid
+docker-compose.override.yml
+
+############################
+# OS / Editor
+############################
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.code-workspace
+
+############################
+# Test / Coverage
+############################
+.coverage
+htmlcov/
+.tox/
+pytest_cache/
+.nox/
+
+############################
+# Deployment
+############################
+*.tfstate
+*.tfstate.backup
+.terraform/

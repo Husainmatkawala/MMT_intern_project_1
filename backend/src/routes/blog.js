@@ -44,6 +44,9 @@ const BLOG_SCORE_SERVICE_URL = process.env.BLOG_SCORE_SERVICE_URL || 'http://loc
 // Chunker Service URL from environment or default
 const CHUNKER_SERVICE_URL = process.env.CHUNKER_SERVICE_URL || 'http://localhost:5005';
 
+// Entity Collection Service URL from environment or default
+const ENTITY_COLLECTION_SERVICE_URL = process.env.ENTITY_COLLECTION_SERVICE_URL || 'http://localhost:5006';
+
 // @route   GET /api/blogs
 // @desc    Get all blogs from all users
 // @access  Private
@@ -717,11 +720,6 @@ router.post('/:id/entity-details', protect, upload.any(), async (req, res) => {
       }
     };
     
-    // Trigger verification in background (non-blocking)
-    triggerVerification().catch(err => {
-      console.error('Verification trigger error:', err);
-    });
-    
     // Trigger blog scoring asynchronously (don't block response)
     const triggerBlogScoring = async () => {
       try {
@@ -749,34 +747,85 @@ router.post('/:id/entity-details', protect, upload.any(), async (req, res) => {
       }
     };
     
-    // Trigger in background (non-blocking)
+    // Orchestrate services with dependencies
+    const triggerServicesOrchestration = async () => {
+      try {
+        console.log(`\n🔄 Starting service orchestration for blog ${blogId}...`);
+        
+        // Step 1: Trigger verification and chunker in parallel (independent)
+        console.log(`\n[Step 1/2] Triggering verification and chunker services (parallel)...`);
+        const [verificationResult, chunkerResult] = await Promise.allSettled([
+          triggerVerification(),
+          (async () => {
+            try {
+              console.log(`Triggering chunker data generation for blog ${blogId}...`);
+              const chunkerResponse = await axios.post(
+                `${CHUNKER_SERVICE_URL}/generate-chunker-data`,
+                { blog_id: blogId },
+                { timeout: 180000 } // 3 minute timeout (AI extraction takes time)
+              );
+              console.log(`✓ Chunker data generation completed for blog ${blogId}`);
+              console.log(`  - Entities processed: ${chunkerResponse.data.entities_processed}`);
+              console.log(`  - Descriptions extracted: ${chunkerResponse.data.descriptions_extracted}`);
+              return chunkerResponse;
+            } catch (chunkerError) {
+              console.error(`⚠ Chunker data generation failed for blog ${blogId}:`, chunkerError.message);
+              if (chunkerError.response) {
+                console.error('  Error details:', chunkerError.response.data);
+              }
+              throw chunkerError;
+            }
+          })()
+        ]);
+        
+        // Check if both prerequisite services succeeded
+        const verificationSuccess = verificationResult.status === 'fulfilled';
+        const chunkerSuccess = chunkerResult.status === 'fulfilled';
+        
+        console.log(`\n✓ [Step 1/2] Completed:`);
+        console.log(`  - Verification: ${verificationSuccess ? '✓ Success' : '✗ Failed'}`);
+        console.log(`  - Chunker: ${chunkerSuccess ? '✓ Success' : '✗ Failed'}`);
+        
+        // Step 2: Only trigger entity collection if prerequisites succeeded
+        if (verificationSuccess && chunkerSuccess) {
+          console.log(`\n[Step 2/2] All prerequisites ready, triggering entity collection...`);
+          try {
+            console.log(`Triggering entity collection processing for blog ${blogId}...`);
+            const collectionResponse = await axios.post(
+              `${ENTITY_COLLECTION_SERVICE_URL}/process-entities`,
+              { blog_id: blogId },
+              { timeout: 120000 } // 2 minute timeout
+            );
+            console.log(`✓ Entity collection processing completed for blog ${blogId}`);
+            console.log(`  - Entities processed: ${collectionResponse.data.statistics.entities_processed}`);
+            console.log(`  - Entities skipped: ${collectionResponse.data.statistics.entities_skipped}`);
+            console.log(`  - Entities inserted: ${collectionResponse.data.statistics.entities_inserted}`);
+            console.log(`  - Entities merged: ${collectionResponse.data.statistics.entities_merged}`);
+            console.log(`\n✅ Service orchestration completed successfully for blog ${blogId}`);
+          } catch (collectionError) {
+            console.error(`⚠ Entity collection processing failed for blog ${blogId}:`, collectionError.message);
+            if (collectionError.response) {
+              console.error('  Error details:', collectionError.response.data);
+            }
+          }
+        } else {
+          console.warn(`\n⚠ [Step 2/2] Skipping entity collection - prerequisites failed`);
+          console.warn(`  Required data not ready: imageaiscores=${verificationSuccess}, chunker_datas=${chunkerSuccess}`);
+        }
+        
+      } catch (orchestrationError) {
+        console.error(`⚠ Service orchestration error for blog ${blogId}:`, orchestrationError.message);
+      }
+    };
+    
+    // Trigger blog scoring (independent, can run in parallel)
     triggerBlogScoring().catch(err => {
       console.error('Blog scoring trigger error:', err);
     });
     
-    // Trigger chunker data generation asynchronously (don't block response)
-    const triggerChunkerGeneration = async () => {
-      try {
-        console.log(`Triggering chunker data generation for blog ${blogId}...`);
-        const chunkerResponse = await axios.post(
-          `${CHUNKER_SERVICE_URL}/generate-chunker-data`,
-          { blog_id: blogId },
-          { timeout: 180000 } // 3 minute timeout (AI extraction takes time)
-        );
-        console.log(`✓ Chunker data generation completed for blog ${blogId}`);
-        console.log(`  - Entities processed: ${chunkerResponse.data.entities_processed}`);
-        console.log(`  - Descriptions extracted: ${chunkerResponse.data.descriptions_extracted}`);
-      } catch (chunkerError) {
-        console.error(`⚠ Chunker data generation failed for blog ${blogId}:`, chunkerError.message);
-        if (chunkerError.response) {
-          console.error('  Error details:', chunkerError.response.data);
-        }
-      }
-    };
-    
-    // Trigger in background (non-blocking)
-    triggerChunkerGeneration().catch(err => {
-      console.error('Chunker generation trigger error:', err);
+    // Trigger orchestration in background (non-blocking)
+    triggerServicesOrchestration().catch(err => {
+      console.error('Service orchestration trigger error:', err);
     });
     
     res.json({
