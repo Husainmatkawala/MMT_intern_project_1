@@ -9,6 +9,7 @@ import TempEntityJSON from '../models/TempEntityJSON.js';
 import TempEntityJSON2 from '../models/TempEntityJSON2.js';
 import ImageAIScore from '../models/ImageAIScore.js';
 import BlogScore from '../models/BlogScore.js';
+import ChunkerData from '../models/ChunkerData.js';
 import { protect } from '../middleware/auth.js';
 import { uploadImage } from '../config/cloudinary.js';
 import { processForensicResponse, extractMetadata } from '../services/forensicProcessor.js';
@@ -39,6 +40,9 @@ const FORENSIC_SERVICE_URL = process.env.FORENSIC_SERVICE_URL || 'http://localho
 
 // Blog Score Service URL from environment or default
 const BLOG_SCORE_SERVICE_URL = process.env.BLOG_SCORE_SERVICE_URL || 'http://localhost:5003';
+
+// Chunker Service URL from environment or default
+const CHUNKER_SERVICE_URL = process.env.CHUNKER_SERVICE_URL || 'http://localhost:5005';
 
 // @route   GET /api/blogs
 // @desc    Get all blogs from all users
@@ -212,6 +216,63 @@ router.get('/:id/entities', protect, async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Server error while fetching entity details', 
+      error: error.message 
+    });
+  }
+});
+
+// @route   GET /api/blogs/:id/chunker-data
+// @desc    Get chunker data for a blog (entities with descriptions)
+// @access  Private
+router.get('/:id/chunker-data', protect, async (req, res) => {
+  try {
+    const blogId = req.params.id;
+    
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(blogId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid blog ID format' 
+      });
+    }
+    
+    // Find the blog
+    const blog = await Blog.findById(blogId);
+    
+    if (!blog) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Blog not found' 
+      });
+    }
+    
+    // Find the chunker data
+    const chunkerData = await ChunkerData.findOne({ blog_id: blogId });
+    
+    if (!chunkerData || !chunkerData.updated_entities) {
+      // No chunker data generated yet
+      return res.json({
+        success: true,
+        blog_id: blogId,
+        blog_title: blog.tittle,
+        entities: {},
+        message: 'Chunker data has not been generated for this blog yet'
+      });
+    }
+    
+    // Return the chunker data with blog info
+    res.json({
+      success: true,
+      blog_id: blogId,
+      blog_title: blog.tittle,
+      entities: chunkerData.updated_entities
+    });
+    
+  } catch (error) {
+    console.error('Error fetching chunker data:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error while fetching chunker data', 
       error: error.message 
     });
   }
@@ -691,6 +752,31 @@ router.post('/:id/entity-details', protect, upload.any(), async (req, res) => {
     // Trigger in background (non-blocking)
     triggerBlogScoring().catch(err => {
       console.error('Blog scoring trigger error:', err);
+    });
+    
+    // Trigger chunker data generation asynchronously (don't block response)
+    const triggerChunkerGeneration = async () => {
+      try {
+        console.log(`Triggering chunker data generation for blog ${blogId}...`);
+        const chunkerResponse = await axios.post(
+          `${CHUNKER_SERVICE_URL}/generate-chunker-data`,
+          { blog_id: blogId },
+          { timeout: 180000 } // 3 minute timeout (AI extraction takes time)
+        );
+        console.log(`✓ Chunker data generation completed for blog ${blogId}`);
+        console.log(`  - Entities processed: ${chunkerResponse.data.entities_processed}`);
+        console.log(`  - Descriptions extracted: ${chunkerResponse.data.descriptions_extracted}`);
+      } catch (chunkerError) {
+        console.error(`⚠ Chunker data generation failed for blog ${blogId}:`, chunkerError.message);
+        if (chunkerError.response) {
+          console.error('  Error details:', chunkerError.response.data);
+        }
+      }
+    };
+    
+    // Trigger in background (non-blocking)
+    triggerChunkerGeneration().catch(err => {
+      console.error('Chunker generation trigger error:', err);
     });
     
     res.json({
