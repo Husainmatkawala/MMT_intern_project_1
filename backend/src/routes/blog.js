@@ -2,12 +2,15 @@ import express from 'express';
 import axios from 'axios';
 import mongoose from 'mongoose';
 import multer from 'multer';
+import exifParser from 'exif-parser';
 import Blog from '../models/Blog.js';
 import User from '../models/User.js';
 import TempEntityJSON from '../models/TempEntityJSON.js';
 import TempEntityJSON2 from '../models/TempEntityJSON2.js';
+import ImageAIScore from '../models/ImageAIScore.js';
 import { protect } from '../middleware/auth.js';
 import { uploadImage } from '../config/cloudinary.js';
+import { processForensicResponse, extractMetadata } from '../services/forensicProcessor.js';
 
 const router = express.Router();
 
@@ -29,6 +32,9 @@ const upload = multer({
 
 // NER Service URL from environment or default
 const NER_SERVICE_URL = process.env.NER_SERVICE_URL || 'http://localhost:5001';
+
+// Forensic Service URL from environment or default
+const FORENSIC_SERVICE_URL = process.env.FORENSIC_SERVICE_URL || 'http://localhost:5002';
 
 // @route   GET /api/blogs
 // @desc    Get all blogs from all users
@@ -369,8 +375,9 @@ router.post('/:id/entity-details', protect, upload.any(), async (req, res) => {
     const originalEntityData = await TempEntityJSON.findOne({ bid: blogId });
     const originalEntities = originalEntityData?.name_entity_json || {};
     
-    // Process uploaded images
+    // Process uploaded images and extract EXIF data
     const uploadedImages = {};
+    const imageExifData = {}; // Store EXIF data before Cloudinary strips it
     
     if (req.files && req.files.length > 0) {
       console.log(`Processing ${req.files.length} uploaded images...`);
@@ -385,7 +392,30 @@ router.post('/:id/entity-details', protect, upload.any(), async (req, res) => {
           const entityId = parts.slice(2).join('_');
           
           try {
-            // Upload to Cloudinary
+            // Extract EXIF data BEFORE uploading to Cloudinary
+            let exifInfo = null;
+            try {
+              const parser = exifParser.create(file.buffer);
+              const result = parser.parse();
+              if (result && result.tags) {
+                exifInfo = {
+                  make: result.tags.Make || null,
+                  model: result.tags.Model || null,
+                  dateTime: result.tags.DateTime || result.tags.DateTimeOriginal || null,
+                  software: result.tags.Software || null,
+                  gps: result.tags.GPSLatitude && result.tags.GPSLongitude ? {
+                    latitude: result.tags.GPSLatitude,
+                    longitude: result.tags.GPSLongitude
+                  } : null,
+                  tagCount: Object.keys(result.tags).length
+                };
+                console.log(`  Extracted EXIF: ${exifInfo.tagCount} tags, Make: ${exifInfo.make || 'N/A'}, Model: ${exifInfo.model || 'N/A'}`);
+              }
+            } catch (exifError) {
+              console.log(`  No EXIF data found (may be screenshot or edited image)`);
+            }
+            
+            // Upload to Cloudinary (EXIF will be stripped)
             const imageUrl = await uploadImage(file.buffer, `travel-entities/${entityType}`);
             
             // Store the URL
@@ -396,6 +426,18 @@ router.post('/:id/entity-details', protect, upload.any(), async (req, res) => {
               uploadedImages[entityType][entityId] = [];
             }
             uploadedImages[entityType][entityId].push(imageUrl);
+            
+            // Store EXIF data mapped to image URL
+            if (!imageExifData[entityType]) {
+              imageExifData[entityType] = {};
+            }
+            if (!imageExifData[entityType][entityId]) {
+              imageExifData[entityType][entityId] = [];
+            }
+            imageExifData[entityType][entityId].push({
+              url: imageUrl,
+              exif: exifInfo
+            });
             
             console.log(`Uploaded image for ${entityType}/${entityId}: ${imageUrl}`);
           } catch (uploadError) {
@@ -426,11 +468,14 @@ router.post('/:id/entity-details', protect, upload.any(), async (req, res) => {
           });
         }
         
-        // Add image URLs
+        // Add image URLs and EXIF data
         if (uploadedImages[entityType] && uploadedImages[entityType][entityId]) {
           mergedEntity.images = uploadedImages[entityType][entityId];
+          // Also store EXIF data for forensic analysis
+          mergedEntity.images_exif = imageExifData[entityType]?.[entityId] || [];
         } else {
           mergedEntity.images = [];
+          mergedEntity.images_exif = [];
         }
         
         updatedEntities[entityType][entityId] = mergedEntity;
@@ -456,7 +501,110 @@ router.post('/:id/entity-details', protect, upload.any(), async (req, res) => {
         updated_entities: updatedEntities
       });
       console.log(`Created new entity details for blog ${blogId}`);
+      console.log(`  Document _id: ${entityRecord._id}`);
     }
+    
+    // Verify the document was created and log its structure
+    const verifyDoc = await TempEntityJSON2.findOne({ blog_id: blogId });
+    if (!verifyDoc) {
+      console.error(`⚠ Warning: Document not found immediately after creation for blog ${blogId}`);
+    } else {
+      console.log(`✓ Verified document exists in database`);
+      console.log(`  Document ID: ${verifyDoc._id}`);
+      console.log(`  Entity types: ${Object.keys(verifyDoc.updated_entities).join(', ')}`);
+      
+      // Log image and EXIF counts per entity type
+      let totalImages = 0;
+      let totalWithExif = 0;
+      
+      Object.keys(verifyDoc.updated_entities).forEach(entityType => {
+        const entities = verifyDoc.updated_entities[entityType];
+        Object.keys(entities).forEach(entityId => {
+          const entity = entities[entityId];
+          const imageCount = entity.images?.length || 0;
+          const exifCount = entity.images_exif?.filter(e => e.exif).length || 0;
+          totalImages += imageCount;
+          totalWithExif += exifCount;
+        });
+      });
+      
+      console.log(`  Total images: ${totalImages}, with EXIF: ${totalWithExif}`);
+    }
+    
+    // Trigger image verification asynchronously (don't block response)
+    // This will analyze all images and update scores in TempEntityJSON2
+    const triggerVerification = async () => {
+      try {
+        console.log(`Triggering image verification for blog ${blogId}...`);
+        const verificationResponse = await axios.post(
+          `${FORENSIC_SERVICE_URL}/verify-blog`,
+          { blog_id: blogId },
+          { timeout: 120000 } // 2 minute timeout
+        );
+        console.log(`✓ Image verification completed for blog ${blogId}`);
+        console.log(`  - Entities processed: ${verificationResponse.data.entities_processed}`);
+        console.log(`  - Images analyzed: ${verificationResponse.data.images_analyzed}`);
+        
+        // Process the forensic response (normalize verdicts and calculate overall scores)
+        try {
+          console.log(`\n📊 Processing forensic response for blog ${blogId}...`);
+          const processedResponse = processForensicResponse(verificationResponse.data);
+          const metadata = extractMetadata(verificationResponse.data);
+          
+          // Store processed response in image_ai_score collection
+          const aiScoreRecord = await ImageAIScore.create({
+            blog_id: blogId,
+            verification_response: processedResponse,
+            metadata: metadata
+          });
+          
+          console.log(`✓ Stored AI score record in database:`);
+          console.log(`  - Record ID: ${aiScoreRecord._id}`);
+          console.log(`  - Blog ID: ${aiScoreRecord.blog_id}`);
+          console.log(`  - Entities processed: ${metadata.entities_processed}`);
+          console.log(`  - Images analyzed: ${metadata.images_analyzed}`);
+          
+          // Log overall scores by category
+          if (processedResponse.verification_results) {
+            console.log(`\n  Overall Scores by Category:`);
+            Object.entries(processedResponse.verification_results).forEach(([category, data]) => {
+              console.log(`    - ${category}: ${data.overall_score.toFixed(2)}`);
+            });
+          }
+        } catch (processingError) {
+          console.error(`⚠ Failed to process and store AI score for blog ${blogId}:`, processingError.message);
+        }
+        
+        // Fetch and log the updated document with scores
+        const updatedDoc = await TempEntityJSON2.findOne({ blog_id: blogId });
+        if (updatedDoc) {
+          console.log(`\n✓ FINAL CHECK: Document with scores in MongoDB`);
+          console.log(`  Document ID: ${updatedDoc._id}`);
+          console.log(`  Scores by entity:`);
+          
+          Object.keys(updatedDoc.updated_entities).forEach(entityType => {
+            const entities = updatedDoc.updated_entities[entityType];
+            Object.keys(entities).forEach(entityId => {
+              const entity = entities[entityId];
+              if (entity.images && entity.images.length > 0) {
+                console.log(`    - ${entityType}/${entityId} (${entity.name}): score=${entity.score}, images=${entity.images.length}`);
+              }
+            });
+          });
+        }
+      } catch (verificationError) {
+        // Log error but don't fail the main request
+        console.error(`⚠ Image verification failed for blog ${blogId}:`, verificationError.message);
+        if (verificationError.response) {
+          console.error('  Error details:', verificationError.response.data);
+        }
+      }
+    };
+    
+    // Trigger verification in background (non-blocking)
+    triggerVerification().catch(err => {
+      console.error('Verification trigger error:', err);
+    });
     
     res.json({
       success: true,
