@@ -277,4 +277,4 @@ blog_score_Service/
 
 ## License
 
-This service is part of the MakeMyTrip Travel Blog project.
+This service is part of the MakeMyTrip Travel Blog project..
