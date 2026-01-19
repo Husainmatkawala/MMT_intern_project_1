@@ -94,20 +94,50 @@ class DescriptionExtractor:
                 if 'score' in restaurant_data:
                     del restaurant_data['score']
         
+        # Process Bus entities (also remove score, add description)
+        if 'Bus' in result_entities:
+            logger.info(f"Processing {len(result_entities['Bus'])} Bus entities")
+            for bus_id, bus_data in result_entities['Bus'].items():
+                description = self._extract_entity_description(
+                    blog_text,
+                    bus_data.get('name', ''),
+                    'bus'
+                )
+                bus_data['description'] = description
+                
+                # Remove score field if exists
+                if 'score' in bus_data:
+                    del bus_data['score']
+        
+        # Process Cab entities (also remove score, add description)
+        if 'Cab' in result_entities:
+            logger.info(f"Processing {len(result_entities['Cab'])} Cab entities")
+            for cab_id, cab_data in result_entities['Cab'].items():
+                description = self._extract_entity_description(
+                    blog_text,
+                    cab_data.get('name', ''),
+                    'cab'
+                )
+                cab_data['description'] = description
+                
+                # Remove score field if exists
+                if 'score' in cab_data:
+                    del cab_data['score']
+        
         logger.info("Description extraction completed")
         return result_entities
     
     def _extract_entity_description(self, blog_text, entity_name, entity_type):
         """
-        Extract description for a single entity using AI
+        Extract and transform description for a single entity into review-style text using AI
         
         Args:
             blog_text (str): The full blog text
             entity_name (str): Name of the entity
-            entity_type (str): Type of entity (place, activity, hotel, restaurant)
+            entity_type (str): Type of entity (place, activity, hotel, restaurant, bus, cab)
         
         Returns:
-            str: Extracted description or empty string if not found
+            str: Review-style description or empty string if not found
         """
         if not entity_name:
             logger.warning(f"Empty entity name for type {entity_type}")
@@ -116,34 +146,42 @@ class DescriptionExtractor:
         try:
             logger.info(f"Extracting description for {entity_type}: {entity_name}")
             
-            # Create prompt for AI
-            prompt = f"""You are analyzing a travel blog to extract descriptions for specific entities.
+            # Create prompt for AI to generate review-style descriptions
+            prompt = f"""You are analyzing a travel blog to create review-style descriptions for specific entities.
 
 Blog Text:
 {blog_text}
 
-Task: Find and extract the EXACT text from the blog that describes the following {entity_type}:
-Entity Name: {entity_name}
+Task: Find information about the following {entity_type} and create a review-style description:
+Entity Name: {entity_name if entity_name else f"the {entity_type} mentioned in the blog"}
 
 Rules:
-1. Extract ONLY the text that the user wrote about this specific {entity_type}
-2. Do NOT paraphrase or rewrite - use the exact wording from the blog
-3. Include complete sentences that describe this {entity_type}
-4. If the entity is mentioned multiple times, combine all relevant descriptions
-5. If no description is found, return an empty string
-6. Keep the description concise but complete (2-4 sentences typically)
-7. You can slightly improve grammar and flow, but maintain the original context and meaning
+1. Extract the relevant information about this {entity_type} from the blog text
+2. Transform it into a professional, review-style description (like a travel review)
+3. Maintain the original context and experiences mentioned by the traveler
+4. Use third-person perspective and proper grammar
+5. Keep it concise (1-3 sentences)
+6. Focus on the traveler's experience, observations, and feelings about this {entity_type}
+7. If no specific information is found, return an empty string
+8. Do NOT add information that is not in the blog text
+9. Make it sound natural and professional, like a travel review
 
-Respond with ONLY the extracted description text, nothing else."""
+Examples of good review-style descriptions:
+- For a place: "The temple offered a serene atmosphere with intricate architecture and deep spiritual significance."
+- For a cab: "The cab had a strong, unpleasant smell, which made the ride uncomfortable."
+- For an activity: "The early morning aarti was a deeply moving spiritual experience with chanting and rituals."
+- For a hotel: "The hotel provided comfortable accommodations with friendly staff and convenient location."
+
+Respond with ONLY the review-style description text, nothing else."""
 
             # Call Azure OpenAI
             response = self.client.chat.completions.create(
                 model=self.deployment_name,
                 messages=[
-                    {"role": "system", "content": "You are a precise text extraction assistant. Extract exact text from blogs without adding or changing information."},
+                    {"role": "system", "content": "You are a professional travel content writer who creates polished, review-style descriptions from travel blogs. You maintain authenticity while improving readability and professionalism."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3,  # Low temperature for more precise extraction
+                temperature=0.5,  # Moderate temperature for natural but controlled generation
                 max_tokens=500
             )
             
@@ -154,7 +192,7 @@ Respond with ONLY the extracted description text, nothing else."""
                 logger.info(f"No description found for {entity_name}")
                 return ""
             
-            logger.info(f"Extracted description for {entity_name}: {description[:100]}...")
+            logger.info(f"Generated review-style description for {entity_name}: {description[:100]}...")
             return description
             
         except Exception as e:
