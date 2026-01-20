@@ -30,10 +30,30 @@ const AllBlogs = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+    <div className="min-h-screen">
       <Header />
       
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {/* Hero Background Section */}
+      <div 
+        className="h-[50vh] w-full bg-cover bg-center relative"
+        style={{ backgroundImage: "url('/hero-background.jpg')" }}
+      >
+        <div className="absolute inset-0 bg-black/30" />
+        <div className="relative h-full flex items-center justify-center">
+          <div className="text-center text-white px-4">
+            <h1 className="text-5xl md:text-6xl font-bold mb-4 drop-shadow-lg">
+              Explore Travel Stories
+            </h1>
+            <p className="text-xl md:text-2xl drop-shadow-md">
+              Discover authentic experiences from travelers worldwide
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Content Section */}
+      <div className="bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Page Header */}
         <div className="mb-8">
           <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-primary-600 to-purple-600 dark:from-primary-400 dark:to-purple-400 bg-clip-text text-transparent mb-2 flex items-center gap-3">
@@ -94,6 +114,7 @@ const AllBlogs = () => {
             Showing {blogs.length} {blogs.length === 1 ? 'blog' : 'blogs'}
           </div>
         )}
+        </div>
       </div>
     </div>
   );
