@@ -131,7 +131,7 @@ const EntitySection = ({
                               value={currentFormData[field] ?? entityData[field] ?? ''}
                               onChange={(e) => onFieldChange(entityType, entityId, field, e.target.value)}
                               placeholder="e.g., 4.5"
-                              className="form-input"
+                              className="form-input [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             />
                           ) : field === 'type' ? (
                             <select

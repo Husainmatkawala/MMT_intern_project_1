@@ -135,7 +135,7 @@ const Header = () => {
                         {profile?.blogCount || 0}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between text-sm">
+                    {/* <div className="flex items-center justify-between text-sm">
                       <span className="text-gray-600 dark:text-gray-400 flex items-center gap-1">
                         <FiAward className="w-4 h-4" />
                         Score
@@ -143,7 +143,7 @@ const Header = () => {
                       <span className="font-semibold text-purple-600 dark:text-purple-400">
                         {profile?.score || 0}
                       </span>
-                    </div>
+                    </div> */}
                   </div>
 
                   <div className="border-t border-gray-200 dark:border-gray-700 mt-2">
