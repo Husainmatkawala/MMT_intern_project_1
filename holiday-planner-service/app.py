@@ -159,16 +159,9 @@ def plan_holiday():
         
         logger.info(f"Processing holiday plan request: {user_input[:100]}...")
         
-        # Step 1: Parse intent (use LLM if enabled)
-        logger.info("Step 1: Parsing intent...")
-        if Config.USE_LLM_INTENT_EXTRACTION:
-            logger.info("Using LLM-based intent extraction")
-            intent = intent_agent.parse_intent_with_llm(user_input)
-        else:
-            logger.info("Using regex-based intent extraction")
-            intent = intent_agent.parse_intent(user_input)
-            # Add user_context for semantic search compatibility
-            intent['user_context'] = user_input
+        # Step 1: Parse intent (always use LLM)
+        logger.info("Step 1: Parsing intent with LLM...")
+        intent = intent_agent.parse_intent_with_llm(user_input)
         
         # Validate intent
         is_valid, error_message = intent_agent.validate_intent(intent)
@@ -180,21 +173,13 @@ def plan_holiday():
                 'intent': intent
             }), 400
         
-        # Step 2: Fetch context data (use semantic search if enabled)
-        logger.info("Step 2: Fetching context data from MongoDB...")
-        if Config.USE_SEMANTIC_SEARCH:
-            logger.info("Using semantic search for context retrieval")
-            context = data_agent.fetch_context_semantic(
-                destination=intent['destination'],
-                intent=intent,
-                preferences=intent.get('preferences')
-            )
-        else:
-            logger.info("Using traditional city-based context retrieval")
-            context = data_agent.fetch_context(
-                destination=intent['destination'],
-                preferences=intent.get('preferences')
-            )
+        # Step 2: Fetch context data (always use semantic search)
+        logger.info("Step 2: Fetching context data with semantic search...")
+        context = data_agent.fetch_context_semantic(
+            destination=intent['destination'],
+            intent=intent,
+            preferences=intent.get('preferences')
+        )
         
         # Check if data is available
         availability = data_agent.check_data_availability(intent['destination'])
@@ -274,16 +259,9 @@ def test_intent_agent():
         if 'user_input' not in data:
             return jsonify({'error': 'Missing user_input'}), 400
         
-        # Support both LLM and regex-based extraction
-        use_llm = data.get('use_llm', Config.USE_LLM_INTENT_EXTRACTION)
-        
-        if use_llm:
-            intent = intent_agent.parse_intent_with_llm(data['user_input'])
-            method_used = 'llm'
-        else:
-            intent = intent_agent.parse_intent(data['user_input'])
-            intent['user_context'] = data['user_input']
-            method_used = 'regex'
+        # Always use LLM for intent extraction
+        intent = intent_agent.parse_intent_with_llm(data['user_input'])
+        method_used = 'llm'
         
         is_valid, error_message = intent_agent.validate_intent(intent)
         
@@ -308,28 +286,18 @@ def test_data_agent():
         if 'destination' not in data:
             return jsonify({'error': 'Missing destination'}), 400
         
-        # Support both semantic and traditional context fetching
-        use_semantic = data.get('use_semantic', Config.USE_SEMANTIC_SEARCH)
-        
-        if use_semantic:
-            # For semantic search, we need an intent with user_context
-            intent = data.get('intent', {
-                'destination': data['destination'],
-                'preferences': data.get('preferences', []),
-                'user_context': data.get('user_context', f"Trip to {data['destination']}")
-            })
-            context = data_agent.fetch_context_semantic(
-                destination=data['destination'],
-                intent=intent,
-                preferences=data.get('preferences')
-            )
-            method_used = 'semantic'
-        else:
-            context = data_agent.fetch_context(
-                destination=data['destination'],
-                preferences=data.get('preferences')
-            )
-            method_used = 'traditional'
+        # Always use semantic search for context fetching
+        intent = data.get('intent', {
+            'destination': data['destination'],
+            'preferences': data.get('preferences', []),
+            'user_context': data.get('user_context', f"Trip to {data['destination']}")
+        })
+        context = data_agent.fetch_context_semantic(
+            destination=data['destination'],
+            intent=intent,
+            preferences=data.get('preferences')
+        )
+        method_used = 'semantic'
         
         availability = data_agent.check_data_availability(data['destination'])
         
@@ -650,30 +618,20 @@ def _handle_planning_query(user_input: str, session_context: dict, user_id: str 
         tuple: (response_text, data_source)
     """
     try:
-        # Parse intent using existing logic
-        if Config.USE_LLM_INTENT_EXTRACTION:
-            intent = intent_agent.parse_intent_with_llm(user_input)
-        else:
-            intent = intent_agent.parse_intent(user_input)
-            intent['user_context'] = user_input
+        # Parse intent using LLM
+        intent = intent_agent.parse_intent_with_llm(user_input)
         
         # Validate intent
         is_valid, error_message = intent_agent.validate_intent(intent)
         if not is_valid:
             return f"I couldn't understand your trip planning request. {error_message}", "planning_error"
         
-        # Fetch context
-        if Config.USE_SEMANTIC_SEARCH:
-            context = data_agent.fetch_context_semantic(
-                destination=intent['destination'],
-                intent=intent,
-                preferences=intent.get('preferences')
-            )
-        else:
-            context = data_agent.fetch_context(
-                destination=intent['destination'],
-                preferences=intent.get('preferences')
-            )
+        # Fetch context using semantic search
+        context = data_agent.fetch_context_semantic(
+            destination=intent['destination'],
+            intent=intent,
+            preferences=intent.get('preferences')
+        )
         
         # Check data availability
         availability = data_agent.check_data_availability(intent['destination'])

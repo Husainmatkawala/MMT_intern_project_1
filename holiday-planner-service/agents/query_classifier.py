@@ -65,33 +65,26 @@ class QueryClassifier:
         system_prompt = self._build_classification_prompt()
         user_prompt = self._build_user_prompt(user_input, session_context, conversation_history)
         
-        try:
-            # Call Azure OpenAI for classification
-            response = self.client.chat.completions.create(
-                model=self.deployment_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.3,  # Lower temperature for more deterministic classification
-                max_tokens=300
-            )
-            
-            classification_text = response.choices[0].message.content.strip()
-            logger.debug(f"LLM classification response: {classification_text}")
-            
-            # Parse JSON response
-            classification = self._parse_classification_response(classification_text)
-            
-            logger.info(f"Query classified as: {classification['type']}")
-            return classification
-            
-        except Exception as e:
-            logger.error(f"Error in LLM classification: {e}", exc_info=True)
-            
-            # Fallback to rule-based classification
-            logger.info("Falling back to rule-based classification")
-            return self._rule_based_classification(user_input, session_context, conversation_history)
+        # Call Azure OpenAI for classification (no fallback)
+        response = self.client.chat.completions.create(
+            model=self.deployment_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3,  # Lower temperature for more deterministic classification
+            max_tokens=300,
+            response_format={"type": "json_object"}
+        )
+        
+        classification_text = response.choices[0].message.content.strip()
+        logger.debug(f"LLM classification response: {classification_text}")
+        
+        # Parse JSON response
+        classification = self._parse_classification_response(classification_text)
+        
+        logger.info(f"Query classified as: {classification['type']}")
+        return classification
     
     def _build_classification_prompt(self) -> str:
         """Build system prompt for query classification"""
