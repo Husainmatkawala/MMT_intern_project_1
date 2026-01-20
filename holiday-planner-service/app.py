@@ -560,30 +560,9 @@ def chat():
         elif query_type == QueryClassifier.PLANNING:
             # Route to holiday planner
             logger.info("Routing to holiday planner...")
-            response_text, data_source, plan_data = _handle_planning_query(
+            response_text, data_source = _handle_planning_query(
                 user_message, session_context, user_id
             )
-            
-            # Store itinerary in session for follow-up queries
-            if plan_data and 'itinerary' in plan_data and 'intent' in plan_data:
-                session_manager.store_itinerary(session_id, plan_data['itinerary'], plan_data['intent'])
-                logger.info(f"Stored itinerary in session {session_id}")
-            
-        elif query_type == QueryClassifier.ITINERARY_FOLLOWUP:
-            # Handle itinerary follow-up query
-            logger.info("Handling itinerary follow-up query...")
-            itinerary_data = session_manager.get_itinerary(session_id)
-            
-            if itinerary_data:
-                response_text = knowledge_agent.handle_itinerary_followup(
-                    question=user_message,
-                    itinerary_data=itinerary_data,
-                    conversation_history=conversation_history
-                )
-                data_source = "itinerary"
-            else:
-                response_text = "I don't have a recent itinerary to reference. Would you like me to create a new trip plan for you?"
-                data_source = "none"
             
         elif query_type == QueryClassifier.FOLLOWUP:
             # Handle follow-up with context
@@ -668,7 +647,7 @@ def _handle_planning_query(user_input: str, session_context: dict, user_id: str 
     Internal helper to handle planning queries
     
     Returns:
-        tuple: (response_text, data_source, plan_data)
+        tuple: (response_text, data_source)
     """
     try:
         # Parse intent using existing logic
@@ -681,7 +660,7 @@ def _handle_planning_query(user_input: str, session_context: dict, user_id: str 
         # Validate intent
         is_valid, error_message = intent_agent.validate_intent(intent)
         if not is_valid:
-            return f"I couldn't understand your trip planning request. {error_message}", "planning_error", None
+            return f"I couldn't understand your trip planning request. {error_message}", "planning_error"
         
         # Fetch context
         if Config.USE_SEMANTIC_SEARCH:
@@ -699,13 +678,7 @@ def _handle_planning_query(user_input: str, session_context: dict, user_id: str 
         # Check data availability
         availability = data_agent.check_data_availability(intent['destination'])
         if not availability['has_data']:
-            # Check if suggestions are available
-            suggestions_msg = ""
-            if availability.get('suggestions'):
-                suggestions = availability['suggestions'][:3]
-                suggestions_msg = f" Did you mean: {', '.join([s[0] for s in suggestions])}?"
-            
-            return f"Sorry, we don't have enough data for {intent['destination']} yet.{suggestions_msg}", "planning_error", None
+            return f"Sorry, we don't have enough data for {intent['destination']} yet.", "planning_error"
         
         # Create plan
         structured_plan = planner_agent.create_plan(intent, context)
@@ -725,18 +698,11 @@ def _handle_planning_query(user_input: str, session_context: dict, user_id: str 
         # Format response
         response_text = f"{narrative}\n\n(Plan ID: {plan_id} - You can retrieve this plan later)"
         
-        # Return plan data for session storage
-        plan_data = {
-            'itinerary': structured_plan,
-            'intent': intent,
-            'plan_id': plan_id
-        }
-        
-        return response_text, "planning", plan_data
+        return response_text, "planning"
         
     except Exception as e:
         logger.error(f"Error in planning query: {e}", exc_info=True)
-        return "I encountered an error while creating your trip plan. Please try again.", "planning_error", None
+        return "I encountered an error while creating your trip plan. Please try again.", "planning_error"
 
 
 @app.route('/api/chat/sessions/<session_id>', methods=['GET'])

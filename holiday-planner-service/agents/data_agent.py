@@ -3,7 +3,6 @@ from pymongo import MongoClient
 from bson import ObjectId
 from typing import List
 from .embedding_service import EmbeddingService
-from .location_resolver import LocationResolver
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +26,6 @@ class DataAgent:
         self.client = MongoClient(mongodb_uri)
         self.db = self.client.get_default_database()
         self.config = config
-        self.mongodb_uri = mongodb_uri
         
         # Get query limits from config or use defaults
         self.limit_hotels = getattr(config, 'QUERY_LIMIT_HOTELS', 10) if config else 10
@@ -36,14 +34,6 @@ class DataAgent:
         self.limit_places = getattr(config, 'QUERY_LIMIT_PLACES', 15) if config else 15
         self.limit_cabs = getattr(config, 'QUERY_LIMIT_CABS', 5) if config else 5
         self.limit_buses = getattr(config, 'QUERY_LIMIT_BUSES', 5) if config else 5
-        
-        # Initialize location resolver for fuzzy matching and hierarchy
-        try:
-            self.location_resolver = LocationResolver(mongodb_uri=mongodb_uri)
-            logger.info("DataAgent: LocationResolver initialized")
-        except Exception as e:
-            logger.warning(f"Failed to initialize LocationResolver: {e}. Using basic location matching.")
-            self.location_resolver = None
         
         # Initialize embedding service for semantic search
         try:
@@ -79,30 +69,15 @@ class DataAgent:
         """
         logger.info(f"Fetching context for destination: {destination}")
         
-        # Resolve location with fuzzy matching and aliases
-        resolved_destination, location_info = self._resolve_destination(destination)
-        
-        if not resolved_destination:
-            logger.warning(f"Could not resolve destination: {destination}")
-            return self._empty_context(destination)
-        
-        # Check if it's a state - aggregate data from all cities
-        if location_info.get('is_state'):
-            logger.info(f"Destination is a state: {resolved_destination}. Aggregating data from cities.")
-            return self._fetch_context_for_state(resolved_destination, location_info['child_cities'], preferences)
-        
-        # Regular city-based context fetch
         context = {
-            'destination': resolved_destination,
-            'original_query': destination,
-            'resolution_method': location_info.get('resolution_method', 'unknown'),
-            'hotels': self._fetch_hotels(resolved_destination),
-            'restaurants': self._fetch_restaurants(resolved_destination),
-            'activities': self._fetch_activities(resolved_destination, preferences),
-            'places': self._fetch_places(resolved_destination),
+            'destination': destination,
+            'hotels': self._fetch_hotels(destination),
+            'restaurants': self._fetch_restaurants(destination),
+            'activities': self._fetch_activities(destination, preferences),
+            'places': self._fetch_places(destination),
             'transport': {
-                'cabs': self._fetch_cabs(resolved_destination),
-                'buses': self._fetch_buses(resolved_destination)
+                'cabs': self._fetch_cabs(destination),
+                'buses': self._fetch_buses(destination)
             }
         }
         
@@ -278,54 +253,13 @@ class DataAgent:
         Returns:
             dict: Availability status for each collection
         """
-        # Resolve destination first
-        resolved_destination, location_info = self._resolve_destination(destination)
-        
-        if not resolved_destination:
-            logger.warning(f"Could not resolve destination for availability check: {destination}")
-            return {
-                'hotels': False,
-                'restaurants': False,
-                'activities': False,
-                'places': False,
-                'cabs': False,
-                'buses': False,
-                'has_data': False
-            }
-        
-        # If it's a state, check if any child city has data
-        if location_info.get('is_state'):
-            cities = location_info.get('child_cities', [])
-            has_any_data = False
-            for city in cities:
-                city_availability = self._check_city_availability(city)
-                if city_availability['has_data']:
-                    has_any_data = True
-                    break
-            return {
-                'hotels': has_any_data,
-                'restaurants': has_any_data,
-                'activities': has_any_data,
-                'places': has_any_data,
-                'cabs': has_any_data,
-                'buses': has_any_data,
-                'has_data': has_any_data,
-                'is_state': True,
-                'cities_checked': cities
-            }
-        
-        # Regular city check
-        return self._check_city_availability(resolved_destination)
-    
-    def _check_city_availability(self, city: str) -> dict:
-        """Check data availability for a specific city"""
         availability = {
-            'hotels': self.hotels.count_documents({'city': {'$regex': city, '$options': 'i'}}) > 0,
-            'restaurants': self.restaurants.count_documents({'city': {'$regex': city, '$options': 'i'}}) > 0,
-            'activities': self.activities.count_documents({'city': {'$regex': city, '$options': 'i'}}) > 0,
-            'places': self.places.count_documents({'city': {'$regex': city, '$options': 'i'}}) > 0,
-            'cabs': self.cabs.count_documents({'city': {'$regex': city, '$options': 'i'}}) > 0,
-            'buses': self.buses.count_documents({'city': {'$regex': city, '$options': 'i'}}) > 0,
+            'hotels': self.hotels.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
+            'restaurants': self.restaurants.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
+            'activities': self.activities.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
+            'places': self.places.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
+            'cabs': self.cabs.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
+            'buses': self.buses.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
         }
         
         availability['has_data'] = any(availability.values())
@@ -350,18 +284,6 @@ class DataAgent:
         
         logger.info(f"Fetching context with semantic search for destination: {destination}")
         
-        # Resolve location with fuzzy matching and aliases
-        resolved_destination, location_info = self._resolve_destination(destination)
-        
-        if not resolved_destination:
-            logger.warning(f"Could not resolve destination: {destination}")
-            return self._empty_context(destination)
-        
-        # Check if it's a state - aggregate data from all cities
-        if location_info.get('is_state'):
-            logger.info(f"Destination is a state: {resolved_destination}. Aggregating semantic data from cities.")
-            return self._fetch_context_semantic_for_state(resolved_destination, location_info['child_cities'], intent, preferences)
-        
         # Build query text from intent
         query_text = self._build_query_text(intent)
         logger.info(f"Query text for semantic search: {query_text[:100]}...")
@@ -371,16 +293,14 @@ class DataAgent:
         
         # Fetch from each collection with semantic ranking
         context = {
-            'destination': resolved_destination,
-            'original_query': destination,
-            'resolution_method': location_info.get('resolution_method', 'unknown'),
-            'hotels': self._fetch_hotels_semantic(resolved_destination, query_embedding),
-            'restaurants': self._fetch_restaurants_semantic(resolved_destination, query_embedding),
-            'activities': self._fetch_activities_semantic(resolved_destination, query_embedding),
-            'places': self._fetch_places_semantic(resolved_destination, query_embedding),
+            'destination': destination,
+            'hotels': self._fetch_hotels_semantic(destination, query_embedding),
+            'restaurants': self._fetch_restaurants_semantic(destination, query_embedding),
+            'activities': self._fetch_activities_semantic(destination, query_embedding),
+            'places': self._fetch_places_semantic(destination, query_embedding),
             'transport': {
-                'cabs': self._fetch_cabs_semantic(resolved_destination, query_embedding),
-                'buses': self._fetch_buses_semantic(resolved_destination, query_embedding)
+                'cabs': self._fetch_cabs_semantic(destination, query_embedding),
+                'buses': self._fetch_buses_semantic(destination, query_embedding)
             }
         }
         
@@ -934,156 +854,3 @@ class DataAgent:
         cleaned['contact'] = contact
         
         return cleaned
-    
-    # Location resolution and hierarchical query methods
-    
-    def _resolve_destination(self, destination: str) -> tuple:
-        """
-        Resolve destination using LocationResolver
-        
-        Args:
-            destination (str): User's destination input
-            
-        Returns:
-            tuple: (resolved_destination, location_info_dict)
-        """
-        if not self.location_resolver:
-            # Fallback without location resolver
-            return destination, {'is_state': False, 'child_cities': [], 'resolution_method': 'none'}
-        
-        # Resolve location
-        resolved, confidence, method = self.location_resolver.resolve_with_confidence(destination)
-        
-        if not resolved or confidence < 0.6:
-            logger.warning(f"Low confidence resolution for: {destination} (confidence: {confidence})")
-            # Try to get suggestions
-            suggestions = self.location_resolver.get_suggestions(destination, limit=3)
-            if suggestions:
-                logger.info(f"Suggestions for '{destination}': {suggestions}")
-            return None, {'is_state': False, 'child_cities': [], 'resolution_method': 'failed', 'suggestions': suggestions}
-        
-        # Get location info (state vs city, hierarchy)
-        location_info = self.location_resolver.get_location_info(resolved)
-        location_info['resolution_method'] = method
-        location_info['confidence'] = confidence
-        
-        return resolved, location_info
-    
-    def _empty_context(self, destination: str) -> dict:
-        """Return empty context structure"""
-        return {
-            'destination': destination,
-            'hotels': [],
-            'restaurants': [],
-            'activities': [],
-            'places': [],
-            'transport': {
-                'cabs': [],
-                'buses': []
-            }
-        }
-    
-    def _fetch_context_for_state(self, state: str, cities: List[str], preferences: list = None) -> dict:
-        """
-        Fetch aggregated context data for a state by querying all its cities
-        
-        Args:
-            state (str): State name
-            cities (list): List of cities in the state
-            preferences (list): User preferences
-            
-        Returns:
-            dict: Aggregated context from all cities
-        """
-        logger.info(f"Fetching context for state: {state} with {len(cities)} cities")
-        
-        aggregated_context = {
-            'destination': state,
-            'is_state_query': True,
-            'cities_included': [],
-            'hotels': [],
-            'restaurants': [],
-            'activities': [],
-            'places': [],
-            'transport': {
-                'cabs': [],
-                'buses': []
-            }
-        }
-        
-        # Fetch data from each city
-        for city in cities:
-            availability = self._check_city_availability(city)
-            if availability['has_data']:
-                logger.info(f"Fetching data for city: {city}")
-                aggregated_context['cities_included'].append(city)
-                
-                # Fetch data for this city
-                aggregated_context['hotels'].extend(self._fetch_hotels(city))
-                aggregated_context['restaurants'].extend(self._fetch_restaurants(city))
-                aggregated_context['activities'].extend(self._fetch_activities(city, preferences))
-                aggregated_context['places'].extend(self._fetch_places(city))
-                aggregated_context['transport']['cabs'].extend(self._fetch_cabs(city))
-                aggregated_context['transport']['buses'].extend(self._fetch_buses(city))
-        
-        logger.info(f"Aggregated context - Cities: {len(aggregated_context['cities_included'])}, "
-                   f"Hotels: {len(aggregated_context['hotels'])}, "
-                   f"Restaurants: {len(aggregated_context['restaurants'])}, "
-                   f"Places: {len(aggregated_context['places'])}")
-        
-        return aggregated_context
-    
-    def _fetch_context_semantic_for_state(self, state: str, cities: List[str], intent: dict, preferences: list = None) -> dict:
-        """
-        Fetch aggregated semantic context data for a state
-        
-        Args:
-            state (str): State name
-            cities (list): List of cities in the state
-            intent (dict): User intent with context
-            preferences (list): User preferences
-            
-        Returns:
-            dict: Aggregated semantic context from all cities
-        """
-        logger.info(f"Fetching semantic context for state: {state} with {len(cities)} cities")
-        
-        # Build query embedding
-        query_text = self._build_query_text(intent)
-        query_embedding = self.embedding_service.generate_embedding(query_text)
-        
-        aggregated_context = {
-            'destination': state,
-            'is_state_query': True,
-            'cities_included': [],
-            'hotels': [],
-            'restaurants': [],
-            'activities': [],
-            'places': [],
-            'transport': {
-                'cabs': [],
-                'buses': []
-            }
-        }
-        
-        # Fetch semantic data from each city
-        for city in cities:
-            availability = self._check_city_availability(city)
-            if availability['has_data']:
-                logger.info(f"Fetching semantic data for city: {city}")
-                aggregated_context['cities_included'].append(city)
-                
-                # Fetch semantic data for this city
-                aggregated_context['hotels'].extend(self._fetch_hotels_semantic(city, query_embedding))
-                aggregated_context['restaurants'].extend(self._fetch_restaurants_semantic(city, query_embedding))
-                aggregated_context['activities'].extend(self._fetch_activities_semantic(city, query_embedding))
-                aggregated_context['places'].extend(self._fetch_places_semantic(city, query_embedding))
-                aggregated_context['transport']['cabs'].extend(self._fetch_cabs_semantic(city, query_embedding))
-                aggregated_context['transport']['buses'].extend(self._fetch_buses_semantic(city, query_embedding))
-        
-        logger.info(f"Aggregated semantic context - Cities: {len(aggregated_context['cities_included'])}, "
-                   f"Hotels: {len(aggregated_context['hotels'])}, "
-                   f"Restaurants: {len(aggregated_context['restaurants'])}, "
-                   f"Places: {len(aggregated_context['places'])}")
-        
-        return aggregated_context

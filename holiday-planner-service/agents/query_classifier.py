@@ -18,7 +18,6 @@ class QueryClassifier:
     FACTUAL = "factual"
     PLANNING = "planning"
     FOLLOWUP = "followup"
-    ITINERARY_FOLLOWUP = "itinerary_followup"  # Follow-ups about generated itineraries
     GENERAL = "general"
     
     def __init__(self, azure_endpoint: str, azure_key: str, deployment_name: str, 
@@ -104,23 +103,18 @@ class QueryClassifier:
 2. **planning** - Requests to create a travel itinerary or plan a trip
    Examples: "Plan a 5-day trip to Goa", "Create an itinerary for Rajasthan", "Help me plan my vacation"
    
-3. **itinerary_followup** - Questions about a PREVIOUSLY GENERATED itinerary
-   Examples: "What about Day 2?", "Tell me more about day 3", "What activities are planned?", "Which hotels did you suggest?", "Next day?", "Continue"
-   IMPORTANT: Only use this if there's evidence of a previous itinerary in the conversation context
-   
-4. **followup** - Other follow-up questions referencing previous conversation (not about itineraries)
+3. **followup** - Follow-up questions referencing previous conversation
    Examples: "Which ones are near the beach?", "Tell me more about the first one", "What about their ratings?"
    
-5. **general** - Greetings, thanks, or general conversation
+4. **general** - Greetings, thanks, or general conversation
    Examples: "Hello", "Thank you", "That's helpful", "Goodbye"
 
 Return a JSON object with this structure:
 {
-    "type": "factual|planning|itinerary_followup|followup|general",
+    "type": "factual|planning|followup|general",
     "entities": {
         "destination": "extracted destination or null",
         "query_type": "hotels|restaurants|places|activities|general",
-        "day_number": "extracted day number or null (for itinerary_followup)",
         "filters": ["list of filters like 'near beach', 'with rating > 4']
     },
     "confidence": 0.0-1.0,
@@ -141,11 +135,6 @@ Be precise and consider the conversation context when provided."""
                 context_info.append(f"Current destination: {session_context['current_destination']}")
             if session_context.get('current_preferences'):
                 context_info.append(f"Preferences: {', '.join(session_context['current_preferences'])}")
-            
-            # Check if there's a stored itinerary
-            if session_context.get('last_itinerary'):
-                itinerary_info = session_context['last_itinerary']
-                context_info.append(f"Has stored itinerary: Yes (destination: {itinerary_info.get('destination', 'Unknown')}, days: {itinerary_info.get('days', 'N/A')})")
             
             if context_info:
                 prompt_parts.append(f"\nSession context:\n" + "\n".join(context_info))
@@ -213,30 +202,6 @@ Be precise and consider the conversation context when provided."""
             dict: Classification result
         """
         user_input_lower = user_input.lower()
-        
-        # Check for itinerary follow-up first (if there's a stored itinerary)
-        has_itinerary = session_context and session_context.get('last_itinerary') is not None
-        
-        if has_itinerary:
-            # Itinerary follow-up indicators
-            itinerary_keywords = ['day', 'next', 'continue', 'more', 'what about', 'tell me about']
-            day_patterns = ['day 1', 'day 2', 'day 3', 'first day', 'second day', 'next day']
-            
-            if any(keyword in user_input_lower for keyword in itinerary_keywords) or \
-               any(pattern in user_input_lower for pattern in day_patterns):
-                import re
-                # Try to extract day number
-                day_match = re.search(r'day\s+(\d+)', user_input_lower)
-                day_number = int(day_match.group(1)) if day_match else None
-                
-                return {
-                    'type': self.ITINERARY_FOLLOWUP,
-                    'entities': {
-                        'day_number': day_number
-                    },
-                    'confidence': 0.85,
-                    'reasoning': 'Detected itinerary follow-up with stored itinerary'
-                }
         
         # General greetings/thanks
         general_keywords = ['hello', 'hi', 'hey', 'thank', 'thanks', 'bye', 'goodbye', 'okay', 'ok']
