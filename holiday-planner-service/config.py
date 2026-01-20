@@ -55,9 +55,10 @@ class Config:
     SEMANTIC_TOP_K_CABS = int(os.getenv('SEMANTIC_TOP_K_CABS', '5'))
     SEMANTIC_TOP_K_BUSES = int(os.getenv('SEMANTIC_TOP_K_BUSES', '5'))
     
-    # Feature Flags
-    USE_SEMANTIC_SEARCH = os.getenv('USE_SEMANTIC_SEARCH', 'True').lower() == 'true'
-    USE_LLM_INTENT_EXTRACTION = os.getenv('USE_LLM_INTENT_EXTRACTION', 'True').lower() == 'true'
+    # Feature Flags (Always enabled - no fallbacks)
+    # These are kept for backward compatibility but are always True
+    USE_SEMANTIC_SEARCH = True  # Always use semantic search
+    USE_LLM_INTENT_EXTRACTION = True  # Always use LLM for intent extraction
     
     # Chatbot Configuration
     SESSION_TIMEOUT_HOURS = int(os.getenv('SESSION_TIMEOUT_HOURS', '2'))

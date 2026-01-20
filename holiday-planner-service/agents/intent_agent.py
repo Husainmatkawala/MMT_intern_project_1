@@ -101,7 +101,8 @@ class IntentAgent:
     
     def parse_intent(self, user_input: str) -> dict:
         """
-        Parse user input and extract structured intent
+        Parse user input using LLM - no regex fallback
+        This method now redirects to parse_intent_with_llm
         
         Args:
             user_input (str): Natural language user request
@@ -109,31 +110,8 @@ class IntentAgent:
         Returns:
             dict: Structured intent with destination, days, people, preferences
         """
-        logger.info(f"Parsing intent from user input: {user_input[:100]}...")
-        
-        user_input_lower = user_input.lower()
-        
-        # Extract destination
-        destination = self._extract_destination(user_input, user_input_lower)
-        
-        # Extract number of days
-        days = self._extract_days(user_input_lower)
-        
-        # Extract number of people
-        people = self._extract_people(user_input_lower)
-        
-        # Extract preferences
-        preferences = self._extract_preferences(user_input_lower)
-        
-        intent = {
-            'destination': destination,
-            'days': days,
-            'people': people,
-            'preferences': preferences
-        }
-        
-        logger.info(f"Extracted intent: {intent}")
-        return intent
+        logger.info(f"Parsing intent (LLM-only) from user input: {user_input[:100]}...")
+        return self.parse_intent_with_llm(user_input)
     
     def _extract_destination(self, user_input: str, user_input_lower: str) -> str:
         """Extract destination from user input"""
@@ -282,6 +260,7 @@ class IntentAgent:
     def parse_intent_with_llm(self, user_input: str) -> dict:
         """
         Parse user input using Azure OpenAI LLM for structured intent extraction
+        LLM is always assumed to be available - no fallback
         
         Args:
             user_input (str): Natural language user request
@@ -290,54 +269,36 @@ class IntentAgent:
             dict: Structured intent with destination, days, people, preferences, and user_context
         """
         if not self.llm_enabled:
-            logger.warning("LLM not enabled, falling back to regex-based parsing")
-            intent = self.parse_intent(user_input)
-            # Add empty user_context for compatibility
-            intent['user_context'] = user_input
-            return intent
+            logger.error("LLM not enabled - cannot parse intent")
+            raise RuntimeError("LLM is required for intent parsing but not enabled")
         
         logger.info(f"Parsing intent with LLM from user input: {user_input[:100]}...")
         
-        try:
-            # Build system and user prompts
-            system_prompt = self._build_llm_system_prompt()
-            user_prompt = self._build_llm_user_prompt(user_input)
-            
-            # Call Azure OpenAI
-            response = self.client.chat.completions.create(
-                model=self.deployment_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.3,  # Lower temperature for more deterministic extraction
-                max_tokens=500,
-                response_format={"type": "json_object"}
-            )
-            
-            # Extract and parse response
-            intent_json = response.choices[0].message.content
-            intent = json.loads(intent_json)
-            
-            # Apply defaults if fields are missing
-            intent = self._apply_defaults_to_intent(intent)
-            
-            logger.info(f"Successfully extracted intent with LLM: {intent}")
-            return intent
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON response from LLM: {e}")
-            logger.info("Falling back to regex-based parsing")
-            intent = self.parse_intent(user_input)
-            intent['user_context'] = user_input
-            return intent
-            
-        except Exception as e:
-            logger.error(f"Error parsing intent with LLM: {e}")
-            logger.info("Falling back to regex-based parsing")
-            intent = self.parse_intent(user_input)
-            intent['user_context'] = user_input
-            return intent
+        # Build system and user prompts
+        system_prompt = self._build_llm_system_prompt()
+        user_prompt = self._build_llm_user_prompt(user_input)
+        
+        # Call Azure OpenAI
+        response = self.client.chat.completions.create(
+            model=self.deployment_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3,  # Lower temperature for more deterministic extraction
+            max_tokens=500,
+            response_format={"type": "json_object"}
+        )
+        
+        # Extract and parse response
+        intent_json = response.choices[0].message.content
+        intent = json.loads(intent_json)
+        
+        # Apply defaults if fields are missing
+        intent = self._apply_defaults_to_intent(intent)
+        
+        logger.info(f"Successfully extracted intent with LLM: {intent}")
+        return intent
     
     def _build_llm_system_prompt(self) -> str:
         """Build system prompt for LLM-based intent extraction"""

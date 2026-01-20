@@ -47,12 +47,12 @@ class KnowledgeAgent:
                        conversation_history: List[dict] = None,
                        classification: dict = None) -> Dict:
         """
-        Answer a travel-related question using database context
+        Answer a travel-related question using database context and conversation history
         
         Args:
             question (str): User's question
             session_context (dict): Current session context
-            conversation_history (list): Recent conversation
+            conversation_history (list): Recent conversation for context
             classification (dict): Query classification result
             
         Returns:
@@ -60,9 +60,9 @@ class KnowledgeAgent:
         """
         logger.info(f"Answering question: {question[:100]}...")
         
-        # Extract query parameters from question and context
+        # Extract query parameters from question, context, and conversation history
         query_params = self._extract_query_params(
-            question, session_context, classification
+            question, session_context, classification, conversation_history
         )
         
         logger.debug(f"Query parameters: {query_params}")
@@ -74,8 +74,10 @@ class KnowledgeAgent:
         has_data = self._has_relevant_data(db_results)
         
         if has_data:
-            # Generate answer with database context
-            answer = self.generate_answer_with_context(question, db_results, query_params)
+            # Generate answer with database context and conversation history
+            answer = self.generate_answer_with_context(
+                question, db_results, query_params, conversation_history
+            )
             data_source = "database"
         else:
             # No data available - provide helpful message
@@ -90,14 +92,15 @@ class KnowledgeAgent:
         }
     
     def _extract_query_params(self, question: str, session_context: dict = None,
-                             classification: dict = None) -> Dict:
+                             classification: dict = None, conversation_history: List[dict] = None) -> Dict:
         """
-        Extract query parameters from question and context
+        Extract query parameters from question, context, and conversation history
         
         Args:
             question (str): User's question
             session_context (dict): Session context
             classification (dict): Query classification
+            conversation_history (list): Recent conversation messages
             
         Returns:
             dict: Query parameters for database
@@ -120,29 +123,71 @@ class KnowledgeAgent:
         if not params['destination'] and session_context:
             params['destination'] = session_context.get('current_destination')
         
-        # Try to extract destination from question if still not found
+        # Try to extract destination from question using LLM with conversation history
         if not params['destination']:
-            params['destination'] = self._extract_destination_from_question(question)
+            params['destination'] = self._extract_destination_from_question(question, conversation_history)
         
         return params
     
-    def _extract_destination_from_question(self, question: str) -> Optional[str]:
-        """Extract destination from question text"""
-        question_lower = question.lower()
+    def _extract_destination_from_question(self, question: str, conversation_history: List[dict] = None) -> Optional[str]:
+        """
+        Extract destination from question text or conversation history using LLM
+        Handles spelling mistakes and variations smartly
+        """
+        logger.info(f"Extracting destination from: {question[:100]}")
         
-        # Common Indian destinations
-        destinations = [
-            'goa', 'mumbai', 'delhi', 'bangalore', 'jaipur', 'udaipur', 'kerala',
-            'ladakh', 'manali', 'shimla', 'rishikesh', 'varanasi', 'agra', 'kolkata',
-            'chennai', 'hyderabad', 'pune', 'mysore', 'ooty', 'darjeeling', 'kashmir',
-            'andaman', 'lakshadweep', 'meghalaya', 'sikkim', 'tawang', 'arunachal pradesh'
-        ]
+        # Build context from conversation history
+        history_context = ""
+        if conversation_history:
+            recent_messages = conversation_history[-5:]  # Last 5 messages
+            history_context = "\n".join([
+                f"{msg['role']}: {msg['content'][:200]}"
+                for msg in recent_messages
+            ])
         
-        for dest in destinations:
-            if dest in question_lower:
-                return dest.capitalize()
+        # Use LLM to extract destination intelligently
+        system_prompt = """You are a destination extractor. Extract the destination (city or state) from the user's question.
+Consider:
+1. Direct mentions of cities/states
+2. Spelling mistakes and variations (e.g., "Bangalor" -> "Bangalore", "Gova" -> "Goa")
+3. Short forms (e.g., "Blr" -> "Bangalore", "Mum" -> "Mumbai")
+4. Context from conversation history
+
+Return ONLY the normalized destination name in Title Case, or "null" if no destination found.
+Examples: "Goa", "Mumbai", "Kerala", "Bangalore", "null"
+"""
         
-        return None
+        user_prompt = f"""Question: "{question}"
+
+Conversation history:
+{history_context if history_context else "No previous conversation"}
+
+Extract the destination."""
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.deployment_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.2,
+                max_tokens=50
+            )
+            
+            destination = response.choices[0].message.content.strip()
+            
+            # Handle "null" response
+            if destination.lower() == "null" or destination.lower() == "none":
+                logger.info("No destination extracted by LLM")
+                return None
+            
+            logger.info(f"LLM extracted destination: {destination}")
+            return destination
+            
+        except Exception as e:
+            logger.error(f"Error extracting destination with LLM: {e}")
+            return None
     
     def query_database(self, query_params: Dict) -> Dict:
         """
@@ -170,36 +215,24 @@ class KnowledgeAgent:
             logger.info(f"No data available for destination: {destination}")
             return {}
         
-        try:
-            # Use semantic search if enabled
-            if self.config and getattr(self.config, 'USE_SEMANTIC_SEARCH', True):
-                # Build intent for semantic search
-                intent = {
-                    'destination': destination,
-                    'user_context': user_context,
-                    'preferences': []
-                }
-                
-                context = self.data_agent.fetch_context_semantic(
-                    destination=destination,
-                    intent=intent,
-                    preferences=None
-                )
-            else:
-                # Traditional city-based search
-                context = self.data_agent.fetch_context(
-                    destination=destination,
-                    preferences=None
-                )
-            
-            # Filter results based on query type
-            filtered_results = self._filter_by_query_type(context, query_type)
-            
-            return filtered_results
-            
-        except Exception as e:
-            logger.error(f"Error querying database: {e}", exc_info=True)
-            return {}
+        # Always use semantic search
+        # Build intent for semantic search
+        intent = {
+            'destination': destination,
+            'user_context': user_context,
+            'preferences': []
+        }
+        
+        context = self.data_agent.fetch_context_semantic(
+            destination=destination,
+            intent=intent,
+            preferences=None
+        )
+        
+        # Filter results based on query type
+        filtered_results = self._filter_by_query_type(context, query_type)
+        
+        return filtered_results
     
     def _filter_by_query_type(self, context: Dict, query_type: str) -> Dict:
         """
@@ -256,26 +289,36 @@ class KnowledgeAgent:
         return count
     
     def generate_answer_with_context(self, question: str, db_context: Dict,
-                                     query_params: Dict) -> str:
+                                     query_params: Dict, conversation_history: List[dict] = None) -> str:
         """
-        Generate natural language answer using database context
+        Generate natural language answer using database context and conversation history
         
         Args:
             question (str): User's question
             db_context (dict): Database results
             query_params (dict): Query parameters
+            conversation_history (list): Recent conversation for context
             
         Returns:
             str: Natural language answer
         """
-        logger.info("Generating answer with database context")
+        logger.info("Generating answer with database context and conversation history")
         
         # Format database results for LLM
         formatted_context = self.format_database_results(db_context, query_params)
         
+        # Build conversation context
+        conversation_context = ""
+        if conversation_history:
+            recent_messages = conversation_history[-6:]  # Last 6 messages (3 exchanges)
+            conversation_context = "\n".join([
+                f"{msg['role'].capitalize()}: {msg['content'][:300]}"
+                for msg in recent_messages
+            ])
+        
         # Build prompt
         system_prompt = self._build_answer_system_prompt()
-        user_prompt = self._build_answer_user_prompt(question, formatted_context)
+        user_prompt = self._build_answer_user_prompt(question, formatted_context, conversation_context)
         
         try:
             response = self.client.chat.completions.create(
@@ -295,30 +338,40 @@ class KnowledgeAgent:
             
         except Exception as e:
             logger.error(f"Error generating answer: {e}", exc_info=True)
-            # Fallback to formatted results
-            return formatted_context
+            raise RuntimeError(f"Failed to generate answer: {e}")
     
     def _build_answer_system_prompt(self) -> str:
         """Build system prompt for answer generation"""
-        return """You are a helpful travel assistant. Answer the user's question using ONLY the provided database information.
+        return """You are a helpful travel assistant with access to conversation history. Answer the user's question using the provided database information and conversation context.
 
 Guidelines:
 - Be conversational and friendly
+- Use conversation history to understand context and references (e.g., "the first one", "those hotels")
 - Provide specific details from the database (names, ratings, descriptions)
 - If the data doesn't fully answer the question, acknowledge what information is available
 - Format responses clearly with bullet points or numbered lists when appropriate
 - Do NOT make up information not in the database
 - If the database lacks specific details, say "I don't have that information"
-- Keep responses concise but informative (aim for 150-300 words)"""
+- Keep responses concise but informative (aim for 150-300 words)
+- For follow-up questions, refer back to previous context naturally"""
     
-    def _build_answer_user_prompt(self, question: str, formatted_context: str) -> str:
-        """Build user prompt with question and context"""
-        return f"""User question: "{question}"
+    def _build_answer_user_prompt(self, question: str, formatted_context: str, 
+                                  conversation_context: str = "") -> str:
+        """Build user prompt with question, database context, and conversation history"""
+        prompt = f"""User question: "{question}"
 
 Available database information:
-{formatted_context}
+{formatted_context}"""
+        
+        if conversation_context:
+            prompt += f"""
 
-Please answer the user's question using only the information provided above."""
+Recent conversation context:
+{conversation_context}"""
+        
+        prompt += "\n\nPlease answer the user's question using the information provided above."
+        
+        return prompt
     
     def format_database_results(self, db_results: Dict, query_params: Dict) -> str:
         """

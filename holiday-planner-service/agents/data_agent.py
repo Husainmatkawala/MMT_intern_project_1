@@ -1,7 +1,8 @@
 import logging
 from pymongo import MongoClient
 from bson import ObjectId
-from typing import List
+from typing import List, Optional, Tuple
+from difflib import SequenceMatcher
 from .embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,164 @@ class DataAgent:
         self.cabs = self.db['cabs']
         self.buses = self.db['buses']
         
+        # Cache for destination normalization
+        self._destination_cache = {}
+        self._load_all_destinations()
+        
         logger.info("DataAgent initialized with MongoDB connection")
+    
+    def _load_all_destinations(self):
+        """Load all unique cities and states from database for fuzzy matching"""
+        try:
+            all_locations = set()
+            
+            # Get all unique cities and states from all collections
+            for collection_name in ['hotels', 'restaurants', 'places', 'activities', 'cabs', 'buses']:
+                if collection_name in self.db.list_collection_names():
+                    collection = self.db[collection_name]
+                    
+                    # Get unique cities
+                    cities = collection.distinct('city')
+                    all_locations.update([c.lower() for c in cities if c])
+                    
+                    # Get unique states
+                    states = collection.distinct('state')
+                    all_locations.update([s.lower() for s in states if s])
+            
+            self._destination_cache = {loc: loc for loc in all_locations}
+            logger.info(f"Loaded {len(self._destination_cache)} unique locations (cities + states) for fuzzy matching")
+            
+        except Exception as e:
+            logger.warning(f"Could not load destinations for fuzzy matching: {e}")
+            self._destination_cache = {}
+    
+    def _fuzzy_match_destination(self, user_input: str) -> Optional[Tuple[str, str, float]]:
+        """
+        Smart fuzzy matching for destination with spelling correction
+        
+        Args:
+            user_input (str): User's input destination (may have typos, short forms, etc.)
+            
+        Returns:
+            tuple: (matched_location, match_type, confidence) or None
+                   match_type can be 'city' or 'state'
+        """
+        if not user_input:
+            return None
+        
+        user_input_lower = user_input.lower().strip()
+        
+        # Direct match
+        if user_input_lower in self._destination_cache:
+            # Determine if it's a city or state by checking collections
+            is_city = self._check_if_city(user_input_lower)
+            match_type = 'city' if is_city else 'state'
+            return (user_input_lower, match_type, 1.0)
+        
+        # Common abbreviations and variations
+        abbreviations = {
+            'mum': 'mumbai',
+            'bombay': 'mumbai',
+            'del': 'delhi',
+            'ncr': 'delhi',
+            'blr': 'bangalore',
+            'bengaluru': 'bangalore',
+            'bang': 'bangalore',
+            'hyd': 'hyderabad',
+            'chen': 'chennai',
+            'kol': 'kolkata',
+            'calcutta': 'kolkata',
+            'pune': 'pune',
+            'puna': 'pune',
+            'goa': 'goa',
+            'panaji': 'goa',
+            'jaipur': 'jaipur',
+            'udaipur': 'udaipur',
+            'kerala': 'kerala',
+            'kochi': 'kerala',
+            'cochin': 'kerala',
+        }
+        
+        # Check abbreviations
+        if user_input_lower in abbreviations:
+            matched = abbreviations[user_input_lower]
+            is_city = self._check_if_city(matched)
+            match_type = 'city' if is_city else 'state'
+            return (matched, match_type, 0.95)
+        
+        # Fuzzy matching with similarity threshold
+        best_match = None
+        best_score = 0.0
+        threshold = 0.7  # 70% similarity required
+        
+        for location in self._destination_cache.keys():
+            # Calculate similarity
+            similarity = SequenceMatcher(None, user_input_lower, location).ratio()
+            
+            # Also check if user input is a substring
+            if user_input_lower in location or location in user_input_lower:
+                similarity = max(similarity, 0.85)
+            
+            if similarity > best_score and similarity >= threshold:
+                best_score = similarity
+                best_match = location
+        
+        if best_match:
+            is_city = self._check_if_city(best_match)
+            match_type = 'city' if is_city else 'state'
+            logger.info(f"Fuzzy matched '{user_input}' to '{best_match}' ({match_type}) with confidence {best_score:.2f}")
+            return (best_match, match_type, best_score)
+        
+        logger.warning(f"Could not fuzzy match destination: {user_input}")
+        return None
+    
+    def _check_if_city(self, location: str) -> bool:
+        """Check if location is primarily a city (vs state)"""
+        # Check if it appears in city field more than state field
+        city_count = 0
+        state_count = 0
+        
+        for collection_name in ['hotels', 'restaurants', 'places', 'activities']:
+            if collection_name in self.db.list_collection_names():
+                collection = self.db[collection_name]
+                city_count += collection.count_documents({'city': {'$regex': f'^{location}$', '$options': 'i'}})
+                state_count += collection.count_documents({'state': {'$regex': f'^{location}$', '$options': 'i'}})
+        
+        return city_count >= state_count
+    
+    def _build_location_query(self, destination: str) -> dict:
+        """
+        Build MongoDB query for destination that searches both city and state
+        
+        Args:
+            destination (str): Normalized destination name
+            
+        Returns:
+            dict: MongoDB query with $or condition for city and state
+        """
+        # Try fuzzy matching first
+        match_result = self._fuzzy_match_destination(destination)
+        
+        if match_result:
+            matched_location, match_type, confidence = match_result
+            logger.info(f"Using matched location: {matched_location} (type: {match_type}, confidence: {confidence:.2f})")
+            
+            # Search both city and state fields for maximum coverage
+            return {
+                '$or': [
+                    {'city': {'$regex': f'^{matched_location}$', '$options': 'i'}},
+                    {'state': {'$regex': f'^{matched_location}$', '$options': 'i'}}
+                ]
+            }
+        else:
+            # Fallback to original destination with flexible regex
+            logger.info(f"No fuzzy match found, using original destination: {destination}")
+            return {
+                '$or': [
+                    {'city': {'$regex': destination, '$options': 'i'}},
+                    {'state': {'$regex': destination, '$options': 'i'}}
+                ]
+            }
     
     def fetch_context(self, destination: str, preferences: list = None) -> dict:
         """
@@ -92,10 +250,11 @@ class DataAgent:
         return context
     
     def _fetch_hotels(self, destination: str) -> list:
-        """Fetch hotels for destination"""
+        """Fetch hotels for destination (searches both city and state)"""
         try:
+            query = self._build_location_query(destination)
             hotels = list(self.hotels.find(
-                {'city': {'$regex': destination, '$options': 'i'}},
+                query,
                 {'_id': 0, 'hotel_name': 1, 'city': 1, 'state': 1, 'rating': 1, 'description': 1}
             ).limit(self.limit_hotels))
             
@@ -116,10 +275,11 @@ class DataAgent:
             return []
     
     def _fetch_restaurants(self, destination: str) -> list:
-        """Fetch restaurants for destination"""
+        """Fetch restaurants for destination (searches both city and state)"""
         try:
+            query = self._build_location_query(destination)
             restaurants = list(self.restaurants.find(
-                {'city': {'$regex': destination, '$options': 'i'}},
+                query,
                 {'_id': 0, 'restaurant_name': 1, 'city': 1, 'state': 1, 'rating': 1, 'description': 1}
             ).limit(self.limit_restaurants))
             
@@ -138,9 +298,9 @@ class DataAgent:
             return []
     
     def _fetch_activities(self, destination: str, preferences: list = None) -> list:
-        """Fetch activities for destination"""
+        """Fetch activities for destination (searches both city and state)"""
         try:
-            query = {'city': {'$regex': destination, '$options': 'i'}}
+            query = self._build_location_query(destination)
             
             # Filter by preferences if provided
             if preferences:
@@ -178,10 +338,11 @@ class DataAgent:
             return []
     
     def _fetch_places(self, destination: str) -> list:
-        """Fetch places/attractions for destination"""
+        """Fetch places/attractions for destination (searches both city and state)"""
         try:
+            query = self._build_location_query(destination)
             places = list(self.places.find(
-                {'city': {'$regex': destination, '$options': 'i'}},
+                query,
                 {'_id': 0, 'place_name': 1, 'city': 1, 'state': 1, 'rating': 1, 'description': 1}
             ).limit(self.limit_places))
             
@@ -200,10 +361,11 @@ class DataAgent:
             return []
     
     def _fetch_cabs(self, destination: str) -> list:
-        """Fetch cab services for destination"""
+        """Fetch cab services for destination (searches both city and state)"""
         try:
+            query = self._build_location_query(destination)
             cabs = list(self.cabs.find(
-                {'city': {'$regex': destination, '$options': 'i'}},
+                query,
                 {'_id': 0, 'service_name': 1, 'city': 1, 'rating': 1, 'contact': 1}
             ).limit(self.limit_cabs))
             
@@ -222,10 +384,11 @@ class DataAgent:
             return []
     
     def _fetch_buses(self, destination: str) -> list:
-        """Fetch bus services for destination"""
+        """Fetch bus services for destination (searches both city and state)"""
         try:
+            query = self._build_location_query(destination)
             buses = list(self.buses.find(
-                {'city': {'$regex': destination, '$options': 'i'}},
+                query,
                 {'_id': 0, 'service_name': 1, 'city': 1, 'rating': 1, 'contact': 1}
             ).limit(self.limit_buses))
             
@@ -245,7 +408,7 @@ class DataAgent:
     
     def check_data_availability(self, destination: str) -> dict:
         """
-        Check if data is available for a destination
+        Check if data is available for a destination (searches both city and state)
         
         Args:
             destination (str): Destination to check
@@ -253,13 +416,15 @@ class DataAgent:
         Returns:
             dict: Availability status for each collection
         """
+        query = self._build_location_query(destination)
+        
         availability = {
-            'hotels': self.hotels.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
-            'restaurants': self.restaurants.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
-            'activities': self.activities.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
-            'places': self.places.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
-            'cabs': self.cabs.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
-            'buses': self.buses.count_documents({'city': {'$regex': destination, '$options': 'i'}}) > 0,
+            'hotels': self.hotels.count_documents(query) > 0,
+            'restaurants': self.restaurants.count_documents(query) > 0,
+            'activities': self.activities.count_documents(query) > 0,
+            'places': self.places.count_documents(query) > 0,
+            'cabs': self.cabs.count_documents(query) > 0,
+            'buses': self.buses.count_documents(query) > 0,
         }
         
         availability['has_data'] = any(availability.values())
@@ -269,9 +434,10 @@ class DataAgent:
     def fetch_context_semantic(self, destination: str, intent: dict, preferences: list = None) -> dict:
         """
         Fetch relevant documents using semantic similarity search
+        Always uses semantic search - no fallback to traditional search
         
         Args:
-            destination (str): City/destination name
+            destination (str): City/destination name (supports fuzzy matching)
             intent (dict): Full intent dict with user_context
             preferences (list): User preferences to filter activities/places
             
@@ -279,8 +445,8 @@ class DataAgent:
             dict: Context data with semantically similar documents
         """
         if not self.semantic_enabled:
-            logger.warning("Semantic search not enabled, falling back to traditional fetch_context")
-            return self.fetch_context(destination, preferences)
+            logger.error("Semantic search not enabled - cannot fetch context")
+            raise RuntimeError("Semantic search is required but not enabled")
         
         logger.info(f"Fetching context with semantic search for destination: {destination}")
         
@@ -342,12 +508,11 @@ class DataAgent:
         return query_text if query_text else "General travel"
     
     def _fetch_hotels_semantic(self, destination: str, query_embedding: List[float]) -> list:
-        """Fetch hotels using semantic similarity"""
+        """Fetch hotels using semantic similarity (searches both city and state)"""
         try:
-            # Fetch all hotels for destination
-            hotels = list(self.hotels.find(
-                {'city': {'$regex': destination, '$options': 'i'}}
-            ))
+            # Fetch all hotels for destination using smart location query
+            query = self._build_location_query(destination)
+            hotels = list(self.hotels.find(query))
             
             if not hotels:
                 logger.info(f"No hotels found for destination: {destination}")
@@ -384,12 +549,11 @@ class DataAgent:
             return self._fetch_hotels(destination)
     
     def _fetch_restaurants_semantic(self, destination: str, query_embedding: List[float]) -> list:
-        """Fetch restaurants using semantic similarity"""
+        """Fetch restaurants using semantic similarity (searches both city and state)"""
         try:
-            # Fetch all restaurants for destination
-            restaurants = list(self.restaurants.find(
-                {'city': {'$regex': destination, '$options': 'i'}}
-            ))
+            # Fetch all restaurants for destination using smart location query
+            query = self._build_location_query(destination)
+            restaurants = list(self.restaurants.find(query))
             
             if not restaurants:
                 logger.info(f"No restaurants found for destination: {destination}")
@@ -426,12 +590,11 @@ class DataAgent:
             return self._fetch_restaurants(destination)
     
     def _fetch_activities_semantic(self, destination: str, query_embedding: List[float]) -> list:
-        """Fetch activities using semantic similarity"""
+        """Fetch activities using semantic similarity (searches both city and state)"""
         try:
-            # Fetch all activities for destination
-            activities = list(self.activities.find(
-                {'city': {'$regex': destination, '$options': 'i'}}
-            ))
+            # Fetch all activities for destination using smart location query
+            query = self._build_location_query(destination)
+            activities = list(self.activities.find(query))
             
             if not activities:
                 logger.info(f"No activities found for destination: {destination}")
@@ -468,12 +631,11 @@ class DataAgent:
             return self._fetch_activities(destination, None)
     
     def _fetch_places_semantic(self, destination: str, query_embedding: List[float]) -> list:
-        """Fetch places using semantic similarity"""
+        """Fetch places using semantic similarity (searches both city and state)"""
         try:
-            # Fetch all places for destination
-            places = list(self.places.find(
-                {'city': {'$regex': destination, '$options': 'i'}}
-            ))
+            # Fetch all places for destination using smart location query
+            query = self._build_location_query(destination)
+            places = list(self.places.find(query))
             
             if not places:
                 logger.info(f"No places found for destination: {destination}")
@@ -510,12 +672,11 @@ class DataAgent:
             return self._fetch_places(destination)
     
     def _fetch_cabs_semantic(self, destination: str, query_embedding: List[float]) -> list:
-        """Fetch cabs using semantic similarity"""
+        """Fetch cabs using semantic similarity (searches both city and state)"""
         try:
-            # Fetch all cabs for destination
-            cabs = list(self.cabs.find(
-                {'city': {'$regex': destination, '$options': 'i'}}
-            ))
+            # Fetch all cabs for destination using smart location query
+            query = self._build_location_query(destination)
+            cabs = list(self.cabs.find(query))
             
             if not cabs:
                 logger.info(f"No cabs found for destination: {destination}")
@@ -552,12 +713,11 @@ class DataAgent:
             return self._fetch_cabs(destination)
     
     def _fetch_buses_semantic(self, destination: str, query_embedding: List[float]) -> list:
-        """Fetch buses using semantic similarity"""
+        """Fetch buses using semantic similarity (searches both city and state)"""
         try:
-            # Fetch all buses for destination
-            buses = list(self.buses.find(
-                {'city': {'$regex': destination, '$options': 'i'}}
-            ))
+            # Fetch all buses for destination using smart location query
+            query = self._build_location_query(destination)
+            buses = list(self.buses.find(query))
             
             if not buses:
                 logger.info(f"No buses found for destination: {destination}")
