@@ -124,14 +124,17 @@ const EntitySection = ({
                           </label>
                           {field === 'rating' ? (
                             <input
-                              type="number"
-                              min="0"
-                              max="5"
-                              step="0.1"
+                              type="text"
                               value={currentFormData[field] ?? entityData[field] ?? ''}
-                              onChange={(e) => onFieldChange(entityType, entityId, field, e.target.value)}
-                              placeholder="e.g., 4.5"
-                              className="form-input [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                // Allow empty string or valid numbers between 0-5
+                                if (value === '' || (!isNaN(value) && parseFloat(value) >= 0 && parseFloat(value) <= 5)) {
+                                  onFieldChange(entityType, entityId, field, value);
+                                }
+                              }}
+                              placeholder="Rating out of 5"
+                              className="form-input"
                             />
                           ) : field === 'type' ? (
                             <select
