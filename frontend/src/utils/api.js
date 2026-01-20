@@ -69,4 +69,36 @@ export const userAPI = {
   getProfile: () => api.get('/users/profile'),
 };
 
+// Chatbot API (Holiday Planner Service on port 5007)
+const CHATBOT_API_URL = 'http://localhost:5007/api';
+
+const chatbotApi = axios.create({
+  baseURL: CHATBOT_API_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+export const chatbotAPI = {
+  sendMessage: (message, sessionId = null) => {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    return chatbotApi.post('/chat', {
+      message,
+      session_id: sessionId,
+      user_id: user._id || user.id
+    });
+  },
+  
+  getSession: (sessionId) => chatbotApi.get(`/chat/sessions/${sessionId}`),
+  
+  createNewSession: (userId = null) => {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    return chatbotApi.post('/chat/sessions/new', {
+      user_id: userId || user._id || user.id
+    });
+  },
+  
+  deleteSession: (sessionId) => chatbotApi.delete(`/chat/sessions/${sessionId}`)
+};
+
 export default api;

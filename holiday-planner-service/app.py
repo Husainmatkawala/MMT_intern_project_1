@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import logging
 import atexit
 from pymongo import MongoClient
@@ -17,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# Enable CORS for frontend
+CORS(app, origins=['http://localhost:5173'], supports_credentials=True)
+logger.info("CORS enabled for frontend (http://localhost:5173)")
 
 # Validate configuration
 try:

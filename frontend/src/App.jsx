@@ -8,6 +8,8 @@ import MyBlogs from './pages/MyBlogs';
 import CreateBlog from './pages/CreateBlog';
 import EntityDetailsForm from './pages/EntityDetailsForm';
 import BlogDetail from './pages/BlogDetail';
+import Chatbot from './pages/Chatbot';
+import ChatbotButton from './components/ChatbotButton';
 
 // Protected Route wrapper
 const ProtectedRoute = ({ children }) => {
@@ -39,75 +41,97 @@ const PublicRoute = ({ children }) => {
   return isAuthenticated ? <Navigate to="/all-blogs" replace /> : children;
 };
 
+// Wrapper component to conditionally render ChatbotButton
+const AppContent = () => {
+  const { isAuthenticated } = useAuth();
+  
+  return (
+    <>
+      <Routes>
+        {/* Public Routes */}
+        <Route
+          path="/"
+          element={
+            <PublicRoute>
+              <Login />
+            </PublicRoute>
+          }
+        />
+        <Route
+          path="/signup"
+          element={
+            <PublicRoute>
+              <Signup />
+            </PublicRoute>
+          }
+        />
+
+        {/* Protected Routes */}
+        <Route
+          path="/all-blogs"
+          element={
+            <ProtectedRoute>
+              <AllBlogs />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/my-blogs"
+          element={
+            <ProtectedRoute>
+              <MyBlogs />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/create"
+          element={
+            <ProtectedRoute>
+              <CreateBlog />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/entity-details/:blogId"
+          element={
+            <ProtectedRoute>
+              <EntityDetailsForm />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/blog/:id"
+          element={
+            <ProtectedRoute>
+              <BlogDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/chatbot"
+          element={
+            <ProtectedRoute>
+              <Chatbot />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Catch all - redirect to login */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+      
+      {/* Global Chatbot Button - only show when authenticated */}
+      {isAuthenticated && <ChatbotButton />}
+    </>
+  );
+};
+
 function App() {
   return (
     <ThemeProvider>
       <Router>
         <AuthProvider>
-          <Routes>
-            {/* Public Routes */}
-            <Route
-              path="/"
-              element={
-                <PublicRoute>
-                  <Login />
-                </PublicRoute>
-              }
-            />
-            <Route
-              path="/signup"
-              element={
-                <PublicRoute>
-                  <Signup />
-                </PublicRoute>
-              }
-            />
-
-            {/* Protected Routes */}
-            <Route
-              path="/all-blogs"
-              element={
-                <ProtectedRoute>
-                  <AllBlogs />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/my-blogs"
-              element={
-                <ProtectedRoute>
-                  <MyBlogs />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/create"
-              element={
-                <ProtectedRoute>
-                  <CreateBlog />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/entity-details/:blogId"
-              element={
-                <ProtectedRoute>
-                  <EntityDetailsForm />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/blog/:id"
-              element={
-                <ProtectedRoute>
-                  <BlogDetail />
-                </ProtectedRoute>
-              }
-            />
-
-            {/* Catch all - redirect to login */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <AppContent />
         </AuthProvider>
       </Router>
     </ThemeProvider>
