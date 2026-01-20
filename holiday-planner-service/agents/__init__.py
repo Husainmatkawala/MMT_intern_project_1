@@ -9,6 +9,7 @@ Contains specialized agents:
 - EmbeddingService: Generate embeddings for semantic search
 - QueryClassifier: Classify user queries for routing
 - KnowledgeAgent: Answer travel questions using database context
+- LocationResolver: Resolve location names with fuzzy matching and hierarchy
 """
 
 from .intent_agent import IntentAgent
@@ -18,6 +19,7 @@ from .narrator_agent import NarratorAgent
 from .embedding_service import EmbeddingService
 from .query_classifier import QueryClassifier
 from .knowledge_agent import KnowledgeAgent
+from .location_resolver import LocationResolver
 
 __all__ = [
     'IntentAgent', 
@@ -26,5 +28,6 @@ __all__ = [
     'NarratorAgent', 
     'EmbeddingService',
     'QueryClassifier',
-    'KnowledgeAgent'
+    'KnowledgeAgent',
+    'LocationResolver'
 ]

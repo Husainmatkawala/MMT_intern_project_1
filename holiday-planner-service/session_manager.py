@@ -312,3 +312,99 @@ class SessionManager:
                 self.get_session_info(session_id)
                 for session_id in self.sessions.keys()
             ]
+    
+    # Itinerary tracking methods
+    
+    def store_itinerary(self, session_id: str, itinerary: dict, intent: dict = None) -> bool:
+        """
+        Store generated itinerary in session context for follow-up queries
+        
+        Args:
+            session_id (str): Session UUID
+            itinerary (dict): Complete itinerary structure with day-wise breakdown
+            intent (dict): Original intent used to generate the itinerary
+            
+        Returns:
+            bool: True if stored successfully, False otherwise
+        """
+        with self.lock:
+            session = self.sessions.get(session_id)
+            
+            if not session:
+                logger.warning(f"Cannot store itinerary - session not found: {session_id}")
+                return False
+            
+            if self.is_session_expired(session_id):
+                logger.warning(f"Cannot store itinerary - session expired: {session_id}")
+                self.delete_session(session_id)
+                return False
+            
+            # Store itinerary and related metadata
+            session['context']['last_itinerary'] = {
+                'itinerary': itinerary,
+                'intent': intent or {},
+                'destination': intent.get('destination') if intent else None,
+                'days': intent.get('days') if intent else len(itinerary.get('days', [])),
+                'stored_at': datetime.now().isoformat()
+            }
+            
+            session['last_activity'] = datetime.now()
+            
+            logger.info(f"Itinerary stored in session {session_id} for destination: {intent.get('destination') if intent else 'Unknown'}")
+            return True
+    
+    def get_itinerary(self, session_id: str) -> Optional[dict]:
+        """
+        Retrieve stored itinerary from session
+        
+        Args:
+            session_id (str): Session UUID
+            
+        Returns:
+            dict or None: Stored itinerary data or None if not found
+        """
+        session = self.get_session(session_id)
+        
+        if not session:
+            return None
+        
+        return session['context'].get('last_itinerary')
+    
+    def get_itinerary_day(self, session_id: str, day_number: int) -> Optional[dict]:
+        """
+        Retrieve specific day from stored itinerary
+        
+        Args:
+            session_id (str): Session UUID
+            day_number (int): Day number (1-indexed)
+            
+        Returns:
+            dict or None: Day details or None if not found
+        """
+        itinerary_data = self.get_itinerary(session_id)
+        
+        if not itinerary_data:
+            logger.debug(f"No itinerary found in session {session_id}")
+            return None
+        
+        itinerary = itinerary_data.get('itinerary', {})
+        days = itinerary.get('days', [])
+        
+        # Day numbers are 1-indexed, array is 0-indexed
+        if 1 <= day_number <= len(days):
+            return days[day_number - 1]
+        
+        logger.debug(f"Day {day_number} not found in itinerary (total days: {len(days)})")
+        return None
+    
+    def has_itinerary(self, session_id: str) -> bool:
+        """
+        Check if session has a stored itinerary
+        
+        Args:
+            session_id (str): Session UUID
+            
+        Returns:
+            bool: True if itinerary exists, False otherwise
+        """
+        return self.get_itinerary(session_id) is not None

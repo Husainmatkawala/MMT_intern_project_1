@@ -2,6 +2,7 @@ import re
 import logging
 import json
 from openai import AzureOpenAI
+from .location_resolver import LocationResolver
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,15 @@ class IntentAgent:
         
         self.config = config
         self.db_client = db_client
+        
+        # Initialize location resolver for fuzzy matching
+        mongodb_uri = getattr(config, 'MONGODB_URI', None) if config else None
+        try:
+            self.location_resolver = LocationResolver(mongodb_uri=mongodb_uri)
+            logger.info("IntentAgent: LocationResolver initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize LocationResolver: {e}")
+            self.location_resolver = None
         
         # Initialize Azure OpenAI client for LLM-based intent extraction
         self.llm_enabled = False
@@ -136,35 +146,57 @@ class IntentAgent:
         return intent
     
     def _extract_destination(self, user_input: str, user_input_lower: str) -> str:
-        """Extract destination from user input"""
+        """Extract destination from user input with fuzzy matching"""
+        # First try to extract a destination candidate using patterns
+        candidate = None
+        
         # Check for known destinations (case-insensitive but preserve original case)
         for destination in self.destinations:
             if destination.lower() in user_input_lower:
-                logger.info(f"Found destination: {destination}")
-                return destination
+                candidate = destination
+                logger.info(f"Found destination candidate from DB: {candidate}")
+                break
         
-        # Try to extract destination using patterns (case-insensitive)
-        # Pattern: "to <destination>", "in <destination>", "<destination> trip"
-        patterns = [
-            r'to\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)',
-            r'in\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)',
-            r'([a-zA-Z]+(?:\s+[a-zA-Z]+)*)\s+trip',
-            r'visit\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)',
-            r'plan.*?(?:to|for)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)',
-            r'itinerary.*?(?:to|for)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)'
-        ]
+        # If not found, try to extract destination using patterns
+        if not candidate:
+            patterns = [
+                r'to\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)',
+                r'in\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)',
+                r'([a-zA-Z]+(?:\s+[a-zA-Z]+)*)\s+trip',
+                r'visit\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)',
+                r'plan.*?(?:to|for)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)',
+                r'itinerary.*?(?:to|for)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)'
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, user_input_lower, re.IGNORECASE)
+                if match:
+                    candidate = match.group(1).strip()
+                    # Skip common words that aren't destinations
+                    skip_words = ['a', 'an', 'the', 'my', 'our', 'this', 'that', 'day', 'days', 'week', 'month']
+                    if candidate.lower() not in skip_words:
+                        logger.info(f"Extracted destination candidate using pattern: {candidate}")
+                        break
+                    else:
+                        candidate = None
         
-        for pattern in patterns:
-            match = re.search(pattern, user_input_lower, re.IGNORECASE)
-            if match:
-                destination = match.group(1).strip()
-                # Capitalize each word properly (Title Case)
-                destination = destination.title()
-                # Skip common words that aren't destinations
-                skip_words = ['a', 'an', 'the', 'my', 'our', 'this', 'that', 'day', 'days']
-                if destination.lower() not in skip_words:
-                    logger.info(f"Extracted destination using pattern: {destination}")
-                    return destination
+        # If we have a candidate, resolve it using LocationResolver
+        if candidate and self.location_resolver:
+            resolved = self.location_resolver.resolve_location(candidate, threshold=70)
+            if resolved:
+                logger.info(f"Resolved destination: {candidate} -> {resolved}")
+                return resolved
+            else:
+                logger.warning(f"Could not resolve destination candidate: {candidate}")
+                # Get suggestions
+                suggestions = self.location_resolver.get_suggestions(candidate, limit=3)
+                if suggestions:
+                    logger.info(f"Suggestions for '{candidate}': {suggestions}")
+                # Return the candidate anyway for downstream processing
+                return candidate.title()
+        elif candidate:
+            # No LocationResolver, return candidate as-is
+            return candidate.title()
         
         logger.warning("Could not extract destination from input")
         return None
