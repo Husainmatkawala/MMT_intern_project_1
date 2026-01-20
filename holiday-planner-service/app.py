@@ -1,9 +1,12 @@
 from flask import Flask, request, jsonify
 import logging
+import atexit
 from pymongo import MongoClient
+from apscheduler.schedulers.background import BackgroundScheduler
 from config import Config
-from agents import IntentAgent, DataAgent, PlannerAgent, NarratorAgent
+from agents import IntentAgent, DataAgent, PlannerAgent, NarratorAgent, QueryClassifier, KnowledgeAgent
 from models import HolidayPlanModel
+from session_manager import SessionManager
 
 # Configure logging
 logging.basicConfig(
@@ -54,7 +57,47 @@ narrator_agent = NarratorAgent(
 # Initialize model
 holiday_plan_model = HolidayPlanModel(mongodb_uri=Config.MONGODB_URI)
 
-logger.info("All agents and models initialized successfully")
+# Initialize chatbot components
+session_manager = SessionManager(
+    timeout_hours=Config.SESSION_TIMEOUT_HOURS,
+    max_history=Config.MAX_CONVERSATION_HISTORY,
+    max_sessions=Config.MAX_ACTIVE_SESSIONS
+)
+
+query_classifier = QueryClassifier(
+    azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
+    azure_key=Config.AZURE_OPENAI_KEY,
+    deployment_name=Config.AZURE_OPENAI_DEPLOYMENT,
+    api_version=Config.AZURE_OPENAI_API_VERSION,
+    config=Config
+)
+
+knowledge_agent = KnowledgeAgent(
+    data_agent=data_agent,
+    azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
+    azure_key=Config.AZURE_OPENAI_KEY,
+    deployment_name=Config.AZURE_OPENAI_DEPLOYMENT,
+    api_version=Config.AZURE_OPENAI_API_VERSION,
+    config=Config
+)
+
+# Initialize background scheduler for session cleanup
+scheduler = BackgroundScheduler()
+scheduler.add_job(
+    func=session_manager.cleanup_expired_sessions,
+    trigger="interval",
+    minutes=Config.SESSION_CLEANUP_INTERVAL_MINUTES,
+    id='cleanup_sessions',
+    name='Cleanup expired chat sessions',
+    replace_existing=True
+)
+scheduler.start()
+logger.info(f"Background scheduler started - cleanup interval: {Config.SESSION_CLEANUP_INTERVAL_MINUTES} minutes")
+
+# Shut down the scheduler when exiting the app
+atexit.register(lambda: scheduler.shutdown())
+
+logger.info("All agents, models, and chatbot components initialized successfully")
 
 
 @app.route('/', methods=['GET'])
@@ -64,7 +107,12 @@ def health_check():
         'status': 'healthy',
         'service': 'Holiday Planner Service',
         'version': '1.0.0',
-        'agents': ['intent', 'data', 'planner', 'narrator']
+        'agents': ['intent', 'data', 'planner', 'narrator', 'query_classifier', 'knowledge'],
+        'chatbot': {
+            'enabled': True,
+            'active_sessions': session_manager.get_active_sessions_count(),
+            'session_timeout_hours': Config.SESSION_TIMEOUT_HOURS
+        }
     }), 200
 
 
@@ -420,6 +468,391 @@ def get_statistics():
         
     except Exception as e:
         logger.error(f"Error in get_statistics: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+# ============================================================================
+# CHATBOT ENDPOINTS
+# ============================================================================
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    """
+    Main chat endpoint - Handle conversational queries with session memory
+    
+    Request Body:
+    {
+        "message": "Suggest places to visit in Goa",
+        "session_id": "optional-uuid",  # Create new if not provided
+        "user_id": "optional-user-id"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "session_id": "uuid",
+        "response": "Here are great places in Goa...",
+        "query_type": "factual",
+        "data_source": "database",  # or "llm_fallback" or "planning"
+        "session_expires_at": "2026-01-20T15:30:00Z"
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        if 'message' not in data:
+            logger.warning("Missing required field: message")
+            return jsonify({
+                'success': False,
+                'error': 'Missing required field: message'
+            }), 400
+        
+        user_message = data['message']
+        session_id = data.get('session_id')
+        user_id = data.get('user_id')
+        
+        logger.info(f"Chat request: {user_message[:100]}... session_id: {session_id}")
+        
+        # Get or create session
+        if session_id:
+            session = session_manager.get_session(session_id)
+            if not session:
+                logger.info(f"Session {session_id} not found or expired, creating new session")
+                session_id = session_manager.create_session(user_id)
+                session = session_manager.get_session(session_id)
+        else:
+            session_id = session_manager.create_session(user_id)
+            session = session_manager.get_session(session_id)
+        
+        # Add user message to session
+        session_manager.add_message(session_id, 'user', user_message)
+        
+        # Get conversation history and context
+        conversation_history = session_manager.get_conversation_history(session_id, limit=10)
+        session_context = session_manager.get_context(session_id)
+        
+        # Classify query
+        logger.info("Classifying user query...")
+        classification = query_classifier.classify_query(
+            user_input=user_message,
+            session_context=session_context,
+            conversation_history=conversation_history
+        )
+        
+        query_type = classification['type']
+        logger.info(f"Query classified as: {query_type}")
+        
+        # Route based on query type
+        if query_type == QueryClassifier.GENERAL:
+            # Handle general chat
+            response_text = knowledge_agent.handle_general_chat(user_message)
+            data_source = "general"
+            
+        elif query_type == QueryClassifier.PLANNING:
+            # Route to holiday planner
+            logger.info("Routing to holiday planner...")
+            response_text, data_source = _handle_planning_query(
+                user_message, session_context, user_id
+            )
+            
+        elif query_type == QueryClassifier.FOLLOWUP:
+            # Handle follow-up with context
+            logger.info("Handling follow-up query...")
+            followup_context = query_classifier.extract_follow_up_context(
+                user_message, conversation_history
+            )
+            
+            # Merge follow-up context with session context
+            merged_classification = {**classification}
+            if 'entities' not in merged_classification:
+                merged_classification['entities'] = {}
+            merged_classification['entities'].update(followup_context)
+            
+            # Query database and generate answer
+            answer_result = knowledge_agent.answer_question(
+                question=user_message,
+                session_context=session_context,
+                conversation_history=conversation_history,
+                classification=merged_classification
+            )
+            
+            response_text = answer_result['response']
+            data_source = answer_result['data_source']
+            
+            # Update session context with new info
+            if answer_result['query_params'].get('destination'):
+                session_manager.update_context(session_id, {
+                    'current_destination': answer_result['query_params']['destination']
+                })
+            
+        else:  # FACTUAL
+            # Handle factual query
+            logger.info("Handling factual query...")
+            answer_result = knowledge_agent.answer_question(
+                question=user_message,
+                session_context=session_context,
+                conversation_history=conversation_history,
+                classification=classification
+            )
+            
+            response_text = answer_result['response']
+            data_source = answer_result['data_source']
+            
+            # Update session context
+            if answer_result['query_params'].get('destination'):
+                session_manager.update_context(session_id, {
+                    'current_destination': answer_result['query_params']['destination']
+                })
+        
+        # Add assistant response to session
+        session_manager.add_message(session_id, 'assistant', response_text)
+        
+        # Get updated session info
+        session_info = session_manager.get_session_info(session_id)
+        
+        # Prepare response
+        response = {
+            'success': True,
+            'session_id': session_id,
+            'response': response_text,
+            'query_type': query_type,
+            'data_source': data_source,
+            'session_expires_at': session_info['expires_at'],
+            'message_count': session_info['message_count']
+        }
+        
+        logger.info(f"Chat response generated successfully for session {session_id}")
+        return jsonify(response), 200
+        
+    except Exception as e:
+        logger.error(f"Error in chat endpoint: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'details': str(e)
+        }), 500
+
+
+def _handle_planning_query(user_input: str, session_context: dict, user_id: str = None):
+    """
+    Internal helper to handle planning queries
+    
+    Returns:
+        tuple: (response_text, data_source)
+    """
+    try:
+        # Parse intent using existing logic
+        if Config.USE_LLM_INTENT_EXTRACTION:
+            intent = intent_agent.parse_intent_with_llm(user_input)
+        else:
+            intent = intent_agent.parse_intent(user_input)
+            intent['user_context'] = user_input
+        
+        # Validate intent
+        is_valid, error_message = intent_agent.validate_intent(intent)
+        if not is_valid:
+            return f"I couldn't understand your trip planning request. {error_message}", "planning_error"
+        
+        # Fetch context
+        if Config.USE_SEMANTIC_SEARCH:
+            context = data_agent.fetch_context_semantic(
+                destination=intent['destination'],
+                intent=intent,
+                preferences=intent.get('preferences')
+            )
+        else:
+            context = data_agent.fetch_context(
+                destination=intent['destination'],
+                preferences=intent.get('preferences')
+            )
+        
+        # Check data availability
+        availability = data_agent.check_data_availability(intent['destination'])
+        if not availability['has_data']:
+            return f"Sorry, we don't have enough data for {intent['destination']} yet.", "planning_error"
+        
+        # Create plan
+        structured_plan = planner_agent.create_plan(intent, context)
+        
+        # Generate narrative
+        narrative = narrator_agent.create_narrative(intent, structured_plan)
+        
+        # Store plan
+        plan_id = holiday_plan_model.create_plan(
+            intent=intent,
+            structured_plan=structured_plan,
+            narrative=narrative,
+            context_used=context,
+            user_id=user_id
+        )
+        
+        # Format response
+        response_text = f"{narrative}\n\n(Plan ID: {plan_id} - You can retrieve this plan later)"
+        
+        return response_text, "planning"
+        
+    except Exception as e:
+        logger.error(f"Error in planning query: {e}", exc_info=True)
+        return "I encountered an error while creating your trip plan. Please try again.", "planning_error"
+
+
+@app.route('/api/chat/sessions/<session_id>', methods=['GET'])
+def get_chat_session(session_id):
+    """
+    Retrieve session information and conversation history
+    
+    Response:
+    {
+        "success": true,
+        "session": {
+            "session_id": "uuid",
+            "created_at": "...",
+            "last_activity": "...",
+            "expires_at": "...",
+            "message_count": 10,
+            "context": {...}
+        },
+        "conversation": [...]
+    }
+    """
+    try:
+        session = session_manager.get_session(session_id)
+        
+        if not session:
+            return jsonify({
+                'success': False,
+                'error': 'Session not found or expired'
+            }), 404
+        
+        session_info = session_manager.get_session_info(session_id)
+        conversation_history = session_manager.get_conversation_history(session_id)
+        
+        return jsonify({
+            'success': True,
+            'session': session_info,
+            'conversation': [
+                {
+                    'role': msg['role'],
+                    'content': msg['content'],
+                    'timestamp': msg['timestamp'].isoformat()
+                }
+                for msg in conversation_history
+            ]
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving session: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/chat/sessions/<session_id>', methods=['DELETE'])
+def delete_chat_session(session_id):
+    """
+    Manually end a chat session
+    
+    Response:
+    {
+        "success": true,
+        "message": "Session deleted successfully"
+    }
+    """
+    try:
+        deleted = session_manager.delete_session(session_id)
+        
+        if deleted:
+            return jsonify({
+                'success': True,
+                'message': 'Session deleted successfully'
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Session not found'
+            }), 404
+        
+    except Exception as e:
+        logger.error(f"Error deleting session: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/chat/sessions/new', methods=['POST'])
+def create_new_session():
+    """
+    Explicitly create a new chat session
+    
+    Request Body:
+    {
+        "user_id": "optional-user-id"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "session_id": "uuid",
+        "expires_at": "...",
+        "timeout_hours": 2
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        user_id = data.get('user_id')
+        
+        session_id = session_manager.create_session(user_id)
+        session_info = session_manager.get_session_info(session_id)
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'expires_at': session_info['expires_at'],
+            'timeout_hours': Config.SESSION_TIMEOUT_HOURS
+        }), 201
+        
+    except Exception as e:
+        logger.error(f"Error creating session: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/chat/health', methods=['GET'])
+def chat_health():
+    """
+    Check chatbot health and statistics
+    
+    Response:
+    {
+        "success": true,
+        "status": "healthy",
+        "active_sessions": 42,
+        "max_sessions": 1000,
+        "session_timeout_hours": 2,
+        "cleanup_interval_minutes": 10
+    }
+    """
+    try:
+        return jsonify({
+            'success': True,
+            'status': 'healthy',
+            'active_sessions': session_manager.get_active_sessions_count(),
+            'max_sessions': Config.MAX_ACTIVE_SESSIONS,
+            'session_timeout_hours': Config.SESSION_TIMEOUT_HOURS,
+            'cleanup_interval_minutes': Config.SESSION_CLEANUP_INTERVAL_MINUTES,
+            'scheduler_running': scheduler.running
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in chat health check: {e}")
         return jsonify({
             'success': False,
             'error': str(e)
