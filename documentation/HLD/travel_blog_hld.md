@@ -287,13 +287,13 @@ graph TD
     Start[Receive Image URL]
     Start --> AICheck{Is AI Generated?}
     
-    AICheck -->|Yes| Penalty1[Apply Penalty: -15]
+    AICheck -->|Yes| Penalty1[Apply Penalty: -50]
     AICheck -->|No| TypeCheck{Entity Type?}
     
     TypeCheck -->|Transport Mode| Skip[Skip Geodata Check]
     TypeCheck -->|Location/Activity| GeoCheck{Has Geodata?}
     
-    GeoCheck -->|Yes| Reward1[Apply Reward: +20]
+    GeoCheck -->|Yes| Reward1[Apply Reward: +100]
     GeoCheck -->|No| Neutral[No Reward: +0]
     
     Penalty1 --> Output[Add Score to JSON]
