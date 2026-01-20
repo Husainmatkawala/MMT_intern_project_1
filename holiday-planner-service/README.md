@@ -2,15 +2,32 @@
 
 Multi-Agent AI Holiday Planner that generates realistic, detailed holiday packages using MongoDB collections as context with **semantic search** and **LLM-based intent extraction**.
 
+## 🆕 NEW: Conversational Chatbot Interface
+
+The service now includes a **chatbot with session-based memory** and **intelligent travel question answering**. Features include:
+
+- ✅ **2-hour session memory** - Maintains conversation context
+- ✅ **Database-aware responses** - Answers from MongoDB travel data
+- ✅ **Follow-up question handling** - Understands context references
+- ✅ **Automatic query routing** - Factual queries vs trip planning
+- ✅ **No persistent history** - Privacy-friendly temporary storage
+
+📖 **[See CHATBOT_GUIDE.md for detailed documentation](CHATBOT_GUIDE.md)**
+
 ## Architecture
 
-This service uses 4 specialized agents + 1 embedding service:
+This service uses 7 specialized agents + supporting components:
 
+**Core Planning Agents:**
 1. **Intent Agent** - Extract structured requirements from user input using Azure OpenAI LLM
 2. **Data Retrieval Agent** - Fetch relevant data using semantic similarity search
 3. **Planner Agent** - Create logical day-wise itinerary using LLM
 4. **Narrator Agent** - Convert structured plan into human-readable narrative
 5. **Embedding Service** - Generate embeddings for semantic document retrieval
+
+**Chatbot Agents (NEW):**
+6. **Query Classifier** - Classify user queries (factual/planning/follow-up/general)
+7. **Knowledge Agent** - Answer travel questions using database context
 
 ## Key Features
 
@@ -100,6 +117,13 @@ python app.py
 ```
 
 ## API Endpoints
+
+### Chatbot Interface (NEW)
+- `POST /api/chat` - **Main chat endpoint** - Send messages, get conversational responses
+- `GET /api/chat/sessions/<session_id>` - Retrieve session info and conversation history
+- `DELETE /api/chat/sessions/<session_id>` - Manually end a session
+- `POST /api/chat/sessions/new` - Explicitly create new session
+- `GET /api/chat/health` - Chatbot health and statistics
 
 ### Main Orchestration
 - `POST /api/plan-holiday` - Generate complete holiday plan

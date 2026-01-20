@@ -59,6 +59,19 @@ class Config:
     USE_SEMANTIC_SEARCH = os.getenv('USE_SEMANTIC_SEARCH', 'True').lower() == 'true'
     USE_LLM_INTENT_EXTRACTION = os.getenv('USE_LLM_INTENT_EXTRACTION', 'True').lower() == 'true'
     
+    # Chatbot Configuration
+    SESSION_TIMEOUT_HOURS = int(os.getenv('SESSION_TIMEOUT_HOURS', '2'))
+    SESSION_CLEANUP_INTERVAL_MINUTES = int(os.getenv('SESSION_CLEANUP_INTERVAL_MINUTES', '10'))
+    MAX_CONVERSATION_HISTORY = int(os.getenv('MAX_CONVERSATION_HISTORY', '20'))
+    MAX_ACTIVE_SESSIONS = int(os.getenv('MAX_ACTIVE_SESSIONS', '1000'))
+    
+    # Query Classification Configuration
+    KNOWLEDGE_QUERY_CONFIDENCE_THRESHOLD = float(os.getenv('KNOWLEDGE_QUERY_CONFIDENCE_THRESHOLD', '0.7'))
+    
+    # Chat Response Configuration
+    CHAT_RESPONSE_MAX_TOKENS = int(os.getenv('CHAT_RESPONSE_MAX_TOKENS', '500'))
+    CHAT_TEMPERATURE = float(os.getenv('CHAT_TEMPERATURE', '0.7'))
+    
     @classmethod
     def validate(cls):
         """Validate required configuration"""
